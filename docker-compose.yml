@@ -32,7 +32,7 @@ services:
       # Reuse Phase 1 HuggingFace model cache (read-only)
       - /home/spitman/Projects/Aneurologic/modelgarden/jetson-containers/data/models:/workspace/models/phase1_models:ro
       # HuggingFace cache shared with Phase 1 (read-write)
-      - ~/.cache/huggingface:/workspace/models/hf_cache
+      - /home/spitman/.cache/huggingface:/workspace/models/hf_cache
       # TensorRT engine cache (persistent between runs)
       - phase5_trt_cache:/workspace/outputs/trt_engines
     stdin_open: true
