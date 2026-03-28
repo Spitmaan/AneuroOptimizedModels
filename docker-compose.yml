@@ -21,17 +21,23 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - CUDA_VISIBLE_DEVICES=0
+      # Host lib paths: cuDNN, TensorRT (same pattern as Phase 3/4)
+      - LD_LIBRARY_PATH=/host-libs:/host-cuda-libs:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.8
       - CUDA_MODULE_LOADING=LAZY
       - OMP_NUM_THREADS=4
-      # HuggingFace — reuse Phase 1 cache from modelgarden to avoid re-downloading
       - HF_HOME=/workspace/models/hf_cache
       - TRANSFORMERS_CACHE=/workspace/models/hf_cache
     volumes:
       - .:/workspace
-      # Reuse Phase 1 HuggingFace model cache (read-only)
-      - /home/spitman/Projects/Aneurologic/modelgarden/jetson-containers/data/models:/workspace/models/phase1_models:ro
-      # HuggingFace cache shared with Phase 1 (read-write)
+      # Jetson host libraries: cuDNN, TensorRT, NCCL (same pattern as Phase 3/4)
+      - /usr/lib/aarch64-linux-gnu:/host-libs:ro
+      - /usr/local/cuda/lib64:/host-cuda-libs:ro
+      # Jetson hardware monitoring
+      - /sys/bus/i2c/drivers/ina3221:/sys/bus/i2c/drivers/ina3221:ro
+      - /sys/class/thermal:/sys/class/thermal:ro
+      - /sys/class/hwmon:/sys/class/hwmon:ro
+      # HuggingFace cache (shared with Phase 1 to avoid re-downloading)
       - /home/spitman/.cache/huggingface:/workspace/models/hf_cache
       # TensorRT engine cache (persistent between runs)
       - phase5_trt_cache:/workspace/outputs/trt_engines
