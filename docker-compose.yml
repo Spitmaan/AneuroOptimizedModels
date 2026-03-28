@@ -29,7 +29,12 @@ services:
       - HF_HOME=/workspace/models/hf_cache
       - TRANSFORMERS_CACHE=/workspace/models/hf_cache
     volumes:
-      - .:/workspace
+      # Mount only specific subdirs — NOT .:/workspace — to preserve
+      # baked-in repos (/workspace/repos/, /workspace/TensorRT-LLM)
+      # from being masked by the host mount.
+      - ./scripts:/workspace/scripts
+      - ./outputs:/workspace/outputs
+      - ./go_server:/workspace/go_server
       # Jetson host libraries: cuDNN, TensorRT, NCCL (same pattern as Phase 3/4)
       - /usr/lib/aarch64-linux-gnu:/host-libs:ro
       - /usr/local/cuda/lib64:/host-cuda-libs:ro

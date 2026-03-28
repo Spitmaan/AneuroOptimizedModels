@@ -80,14 +80,16 @@ def main():
             results["gpu_device"] = {"ok": ok, "value": v}
 
             # Measure CUDA allocatable ceiling
+            # On Jetson UMA, use half-precision to reduce contiguous block size
             max_alloc_gb = 0.0
             for gb in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]:
                 try:
-                    t = torch.zeros(int(gb * 1e9 / 4), dtype=torch.float32, device="cuda")
+                    n = int(gb * 1e9 / 2)  # float16 = 2 bytes
+                    t = torch.zeros(n, dtype=torch.float16, device="cuda")
                     del t
                     torch.cuda.empty_cache()
                     max_alloc_gb = gb
-                except RuntimeError:
+                except (RuntimeError, Exception):
                     break
             ok, v = check("CUDA max allocatable", lambda: f"~{max_alloc_gb:.1f} GB")
             results["cuda_max_alloc_gb"] = {"ok": ok, "value": max_alloc_gb}
