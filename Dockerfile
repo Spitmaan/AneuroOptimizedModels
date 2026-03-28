@@ -56,6 +56,8 @@ RUN go version
 # ── Python requirements ───────────────────────────────────────────────────────
 COPY requirements.txt /workspace/requirements.txt
 RUN pip3 install --no-cache-dir -r /workspace/requirements.txt
+# bitsandbytes: Jetson pip index only has dev builds (0.47.0.dev0) — needs --pre
+RUN pip3 install --no-cache-dir --pre bitsandbytes
 
 # ── lm-eval (EleutherAI evaluation harness) ───────────────────────────────────
 # GSM8K (math/logic) and ARC-Challenge (science reasoning) support built-in

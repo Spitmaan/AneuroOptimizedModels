@@ -7,7 +7,7 @@
 # torch/torchvision pre-installed in L4T base image — do NOT reinstall
 transformers>=4.44.0
 accelerate>=0.33.0
-bitsandbytes>=0.43.0
+# bitsandbytes: installed separately in Dockerfile with --pre (Jetson has dev builds only)
 peft>=0.12.0                    # LoRA / adapter layers (Stage 6 distillation)
 einops>=0.7.0
 
