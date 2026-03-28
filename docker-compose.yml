@@ -1,0 +1,50 @@
+version: "3.8"
+
+# =============================================================================
+# ANeurologic Phase 5 — Advanced Optimization
+# =============================================================================
+
+services:
+  aneurologic_phase5:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aneurologic_phase5:latest
+    container_name: aneurologic_phase5
+    runtime: nvidia
+    network_mode: host
+    shm_size: "16g"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.8
+      - CUDA_MODULE_LOADING=LAZY
+      - OMP_NUM_THREADS=4
+      # HuggingFace — reuse Phase 1 cache from modelgarden to avoid re-downloading
+      - HF_HOME=/workspace/models/hf_cache
+      - TRANSFORMERS_CACHE=/workspace/models/hf_cache
+    volumes:
+      - .:/workspace
+      # Reuse Phase 1 HuggingFace model cache (read-only)
+      - /home/spitman/Projects/Aneurologic/modelgarden/jetson-containers/data/models:/workspace/models/phase1_models:ro
+      # HuggingFace cache shared with Phase 1 (read-write)
+      - ~/.cache/huggingface:/workspace/models/hf_cache
+      # TensorRT engine cache (persistent between runs)
+      - phase5_trt_cache:/workspace/outputs/trt_engines
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  phase5_trt_cache:
+    driver: local

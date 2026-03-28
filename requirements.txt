@@ -1,0 +1,48 @@
+# =============================================================================
+# ANeurologic Phase 5 — Advanced Optimization Python Dependencies
+# Target: Jetson Orin Nano 8GB, JetPack 6.x, CUDA 12.6, aarch64
+# =============================================================================
+
+# ── Core ML ──────────────────────────────────────────────────────────────────
+# torch/torchvision pre-installed in L4T base image — do NOT reinstall
+transformers>=4.44.0
+accelerate>=0.33.0
+bitsandbytes>=0.43.0
+peft>=0.12.0                    # LoRA / adapter layers (Stage 6 distillation)
+einops>=0.7.0
+
+# ── HuggingFace ecosystem ─────────────────────────────────────────────────────
+huggingface_hub>=0.24.0
+datasets>=2.20.0
+tokenizers>=0.19.0
+
+# ── KV-cache quantization (Stage 3) ──────────────────────────────────────────
+scipy>=1.11.0                   # polar coordinate math (PolarQuant)
+# QJL and KIVI cloned from GitHub — installed from /workspace/repos/
+
+# ── lm-eval (installed separately in Dockerfile for version control) ─────────
+# lm-eval>=0.4.3
+
+# ── Numerics & analysis ───────────────────────────────────────────────────────
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.13.0
+scikit-learn>=1.3.0
+
+# ── Serving & API ─────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn>=0.29.0
+httpx>=0.27.0                   # HTTP client for teacher API (Stage 6)
+openai>=1.35.0                  # OpenAI-compat client for teacher model (Stage 6)
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+tqdm>=4.66.0
+pyyaml>=6.0
+rich>=13.0.0                    # Pretty console output for reports
+psutil>=5.9.0                   # System memory monitoring
+py3nvml>=0.2.7                  # NVIDIA GPU memory stats
+jetson-stats>=4.3.2             # jtop for Jetson power monitoring
+
+# ── Profiling ────────────────────────────────────────────────────────────────
+memory-profiler>=0.61.0
