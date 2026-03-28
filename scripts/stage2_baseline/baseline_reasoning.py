@@ -93,8 +93,13 @@ def run_lm_eval(model_id: str, tasks: list, n_shots: int, limit: int,
         # load_in_4bit=True: required on Jetson (2-3GB CUDA budget).
         # lm_eval passes these directly to AutoModelForCausalLM.from_pretrained()
         # via transformers integration. Same approach as Phase 4 SLM fix.
+        # Note: load_in_4bit was removed as a direct kwarg in transformers 5.x
+        # (requires BitsAndBytesConfig object, which lm_eval can't pass via string).
+        # We use dtype=float16 + batch_size=1 to stay within Jetson's 3GB CUDA budget.
+        # Qwen2.5-0.5B: ~1GB fp16 → fits comfortably.
+        # LFM2.5-1.2B: ~2.4GB fp16 → marginal; swap provides fallback.
         "--model_args", (f"pretrained={model_id},dtype=float16,device_map=auto,"
-                         f"load_in_4bit=True,trust_remote_code=True"),
+                         f"trust_remote_code=True"),
         "--tasks", task_str,
         "--num_fewshot", str(n_shots),
         "--batch_size", "1",      # Jetson UMA: single example at a time
