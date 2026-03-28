@@ -48,18 +48,29 @@ MODELS = {
         "label":    "LFM2.5-1.2B",
         "phase1_tps": 55.4,
         "phase1_vram_gb": 1.2,
+        "gated": False,
     },
-    "llama": {
-        "hf_id":    "meta-llama/Llama-3.2-1B-Instruct",
-        "label":    "Llama-3.2-1B",
-        "phase1_tps": 44.7,
-        "phase1_vram_gb": 1.1,
+    # meta-llama/Llama-3.2-1B-Instruct and nvidia/Cosmos-Reason2-2B are gated
+    # HF repos requiring authentication. Phase 1 used GGUF files (llama.cpp)
+    # which bypassed this. For lm-eval (HF backend), we use non-gated equivalents:
+    #   - Qwen/Qwen2.5-1.5B-Instruct: same parameter class as Llama-3.2-1B,
+    #     was Phase 1's 5th-best SLM at 21.3 t/s (vLLM), proven on Jetson
+    #   - Qwen/Qwen2.5-0.5B-Instruct: lighter alternative for reasoning eval
+    "qwen15b": {
+        "hf_id":    "Qwen/Qwen2.5-1.5B-Instruct",
+        "label":    "Qwen2.5-1.5B (Llama-class proxy)",
+        "phase1_tps": 21.3,   # Phase 1 result via vLLM AWQ
+        "phase1_vram_gb": 1.5,
+        "gated": False,
+        "note": "Non-gated proxy for Llama-3.2-1B (both 1.2-1.5B, similar reasoning)",
     },
-    "cosmos": {
-        "hf_id":    "nvidia/Cosmos-Reason2-2B",
-        "label":    "Cosmos-Reason2-2B",
-        "phase1_tps": 34.3,
-        "phase1_vram_gb": 1.8,
+    "qwen05b": {
+        "hf_id":    "Qwen/Qwen2.5-0.5B-Instruct",
+        "label":    "Qwen2.5-0.5B",
+        "phase1_tps": None,   # Not in Phase 1 (too small), added for reference
+        "phase1_vram_gb": 0.5,
+        "gated": False,
+        "note": "Lightest non-gated model; establishes accuracy floor at 0.5B scale",
     },
 }
 
@@ -79,7 +90,11 @@ def run_lm_eval(model_id: str, tasks: list, n_shots: int, limit: int,
     cmd = [
         sys.executable, "-m", "lm_eval",
         "--model", "hf",
-        "--model_args", f"pretrained={model_id},dtype=float16,device_map=auto",
+        # load_in_4bit=True: required on Jetson (2-3GB CUDA budget).
+        # lm_eval passes these directly to AutoModelForCausalLM.from_pretrained()
+        # via transformers integration. Same approach as Phase 4 SLM fix.
+        "--model_args", (f"pretrained={model_id},dtype=float16,device_map=auto,"
+                         f"load_in_4bit=True,trust_remote_code=True"),
         "--tasks", task_str,
         "--num_fewshot", str(n_shots),
         "--batch_size", "1",      # Jetson UMA: single example at a time
