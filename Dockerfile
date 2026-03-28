@@ -115,6 +115,6 @@ ENV OMP_NUM_THREADS=4
 ENV PYTHONUNBUFFERED=1
 
 COPY scripts/ /workspace/scripts/
-COPY go_server/ /workspace/go_server/
+# go_server/ is built in Stage 4 and mounted via docker-compose volume
 
 CMD ["/bin/bash"]
