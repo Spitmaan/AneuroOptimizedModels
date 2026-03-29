@@ -373,20 +373,28 @@ def load_model_kv(model_id: str, device: str, seq_len: int = 512):
             V = kv_cache.value_cache[0]
             n_layers = len(kv_cache.key_cache)
 
-    if K is None:
+    # Validate: K must be a 4D tensor [B, H, S, D] with S > 0
+    def valid_kv(t):
+        return (t is not None and isinstance(t, torch.Tensor)
+                and t.ndim == 4 and t.numel() > 0)
+
+    if not valid_kv(K):
         # Fallback: synthesize a realistic KV tensor for compression benchmarking.
-        # This covers hybrid architectures (LFM2) where the cache format is
-        # non-standard. Dimensions match a 1B-class model: 16 heads, 64 head-dim.
-        print(f"  ⚠️  Non-standard KV cache (hybrid arch). Using synthetic KV tensor.")
-        B, H, S, D = 1, 16, input_ids.shape[1], 64
-        K = torch.randn(B, H, S, D, device="cpu", dtype=torch.float16)
-        V = torch.randn(B, H, S, D, device="cpu", dtype=torch.float16)
+        # Covers hybrid architectures (LFM2 HybridConvCache, Mamba SSM, etc.)
+        # where attention-style KV either doesn't exist or has non-standard dims.
+        # Dimensions match a 1.2B-class model: 8 GQA heads, 64 head-dim.
+        S_len = min(input_ids.shape[1], seq_len)
+        print(f"  ⚠️  Non-standard KV cache (hybrid arch, shape={K.shape if K is not None else None}). "
+              f"Using synthetic KV tensor [1,8,{S_len},64].")
+        B, H, S, D = 1, 8, S_len, 64
+        K = torch.randn(B, H, S, D, dtype=torch.float16)
+        V = torch.randn(B, H, S, D, dtype=torch.float16)
         n_layers = 1
-        total_kv_mb = K.numel() * 2 * 2 / 1e6  # K + V, fp16
+        total_kv_mb = K.numel() * 4 / 1e6  # K + V, fp16
 
     # Move to CPU for compression (algorithms run on CPU tensors)
-    K = K.detach().cpu()
-    V = V.detach().cpu()
+    K = K.detach().float().cpu()  # convert to fp32 for numerical stability
+    V = V.detach().float().cpu()
 
     print(f"    KV cache: {n_layers} layers, K shape {K.shape}, total {total_kv_mb:.1f} MB")
 
