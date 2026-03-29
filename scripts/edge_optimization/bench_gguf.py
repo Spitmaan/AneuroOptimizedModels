@@ -167,10 +167,12 @@ def complete(prompt: str, n_predict: int = 256, temperature: float = 0.0,
 
 
 # ── GSM8K evaluation ──────────────────────────────────────────────────────────
+_HF_CACHE = "/tmp/hf_datasets_cache"
+
 def eval_gsm8k(n_samples: int = 20) -> dict:
     try:
         from datasets import load_dataset
-        ds = load_dataset("openai/gsm8k", "main", split="test")
+        ds = load_dataset("openai/gsm8k", "main", split="test", cache_dir=_HF_CACHE)
     except Exception as e:
         print(f"  ERROR loading GSM8K: {e}")
         return {"score": 0.0, "correct": 0, "total": 0}
@@ -208,7 +210,7 @@ def eval_gsm8k(n_samples: int = 20) -> dict:
 def eval_arc(n_samples: int = 20) -> dict:
     try:
         from datasets import load_dataset
-        ds = load_dataset("allenai/ai2_arc", "ARC-Challenge", split="test")
+        ds = load_dataset("allenai/ai2_arc", "ARC-Challenge", split="test", cache_dir=_HF_CACHE)
     except Exception as e:
         print(f"  ERROR loading ARC-Challenge: {e}")
         return {"score": 0.0, "correct": 0, "total": 0}
