@@ -304,31 +304,38 @@ def eval_arc(model, tokenizer, method, cache_type, device, n_samples=20):
         with torch.no_grad():
             ctx_out = model(**ctx_ids, use_cache=True)
         kv = apply_kv_compression(ctx_out.past_key_values, method, cache_type)
+        # ctx_out.logits[:, -1, :] predicts the FIRST token of each choice.
+        ctx_last_lp = F.log_softmax(ctx_out.logits[0, -1, :].float(), dim=-1)
 
         # Pass 2: score each choice
         log_probs = []
         for choice_text in choices:
             c_ids = tokenizer(" " + choice_text, add_special_tokens=False,
                               return_tensors="pt").to(device)
-            if c_ids["input_ids"].shape[1] == 0:
+            c_tokens = c_ids["input_ids"][0]        # [L]
+            if len(c_tokens) == 0:
                 log_probs.append(-1e9)
                 continue
-            attn_mask = torch.ones(1, ctx_len + c_ids["input_ids"].shape[1],
+
+            # P(c_tokens[0] | context) from the context pass last logit
+            lp_first = ctx_last_lp[c_tokens[0].item()]
+
+            if len(c_tokens) == 1:
+                log_probs.append(lp_first.item())
+                continue
+
+            # P(c_tokens[1..] | context + c_tokens[0..]) from the choice pass
+            attn_mask = torch.ones(1, ctx_len + len(c_tokens),
                                    device=device, dtype=torch.long)
             with torch.no_grad():
                 c_out = model(input_ids=c_ids["input_ids"],
                               past_key_values=kv,
                               attention_mask=attn_mask,
                               use_cache=False)
-            logits  = c_out.logits.float()
-            lp      = F.log_softmax(logits, dim=-1)
-            targets = c_ids["input_ids"][0]
-            if logits.shape[1] >= len(targets):
-                token_lps = lp[0, :len(targets)].gather(
-                    1, targets.unsqueeze(1)).squeeze(1)
-                log_probs.append(token_lps.sum().item())
-            else:
-                log_probs.append(lp[0, -1, targets[-1].item()].item())
+            # c_out.logits[t] predicts c_tokens[t+1], so use logits[0..L-2]
+            lp_rest = F.log_softmax(c_out.logits[0, :-1, :].float(), dim=-1)
+            tail_lps = lp_rest.gather(1, c_tokens[1:].unsqueeze(1)).squeeze(1)
+            log_probs.append(lp_first.item() + tail_lps.sum().item())
 
         pred_idx = int(torch.tensor(log_probs).argmax().item())
         if pred_idx == gold_idx:
