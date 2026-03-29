@@ -565,7 +565,7 @@ def generate_report(results: dict):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--student", choices=["lfm", "llama", "all"], default="lfm")
+    parser.add_argument("--student", choices=["lfm", "llama", "qwen05b", "all"], default="qwen05b")
     parser.add_argument("--teacher-api", choices=["synthetic", "openai", "ollama"],
                         default="synthetic",
                         help="Teacher model backend ('synthetic' needs no API key)")
@@ -586,10 +586,11 @@ def main():
         print("  DRY RUN: 1 epoch, limited samples")
 
     STUDENT_MAP = {
-        "lfm":   ("LiquidAI/LFM2.5-1.2B-Instruct", "LFM2.5-1.2B"),
-        "llama": ("meta-llama/Llama-3.2-1B-Instruct", "Llama-3.2-1B"),
+        "lfm":     ("LiquidAI/LFM2.5-1.2B-Instruct",   "LFM2.5-1.2B"),
+        "llama":   ("meta-llama/Llama-3.2-1B-Instruct", "Llama-3.2-1B"),
+        "qwen05b": ("Qwen/Qwen2.5-0.5B-Instruct",       "Qwen2.5-0.5B"),
     }
-    students = (["lfm", "llama"] if args.student == "all"
+    students = (["qwen05b", "lfm"] if args.student == "all"
                 else [args.student])
 
     print(f"\n{'='*62}")
@@ -631,6 +632,16 @@ def main():
             device_map=device, low_cpu_mem_usage=True,
         )
         hidden_size = backbone.config.hidden_size
+
+        # Gradient checkpointing: recomputes activations during backward pass
+        # instead of storing them, trading compute for ~40% VRAM reduction.
+        # Critical on Jetson 8GB UMA where model + gradients can exceed budget.
+        try:
+            backbone.gradient_checkpointing_enable()
+            backbone.enable_input_require_grads()
+            print(f"  ✅ Gradient checkpointing enabled")
+        except Exception as e:
+            print(f"  ⚠️  Gradient checkpointing not available: {e}")
 
         model = StudentWithHead(backbone, hidden_size).to(device)
 
