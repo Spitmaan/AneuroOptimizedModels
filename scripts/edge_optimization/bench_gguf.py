@@ -144,10 +144,16 @@ def start_server(model_path: str, extra_flags: list[str]) -> None:
 def stop_server() -> None:
     global _server_proc
     if _server_proc is not None:
-        os.killpg(os.getpgid(_server_proc.pid), signal.SIGTERM)
-        _server_proc.wait(timeout=10)
+        try:
+            os.killpg(os.getpgid(_server_proc.pid), signal.SIGTERM)
+            _server_proc.wait(timeout=10)
+        except Exception:
+            pass
         _server_proc = None
-        time.sleep(1)
+    # Kill any stale llama-server on this port (e.g. from a previous crash)
+    subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
+    # Wait for Jetson UMA CUDA context to fully release
+    time.sleep(5)
 
 def complete(prompt: str, n_predict: int = 256, temperature: float = 0.0,
              stop: list[str] | None = None) -> str:
@@ -325,6 +331,11 @@ def main():
         "speed": {},
         "accuracy": {},
     }
+
+    # Ensure any stale llama processes are gone before we start
+    subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
+    subprocess.run(["pkill", "-f", "llama-bench"], capture_output=True)
+    time.sleep(3)
 
     # Step 1: Speed
     print("[1/3] Throughput benchmark (llama-bench, 3 repetitions) ...")
