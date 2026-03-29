@@ -293,9 +293,9 @@ class ClassificationHead(nn.Module):
         self.head  = nn.Linear(128, n_classes)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        # hidden_states: [B, S, H]
-        # Mean pool over sequence
-        x = hidden_states.mean(dim=1)              # [B, H]
+        # hidden_states: [B, S, H] — may be fp16 from 4-bit model
+        # Cast to float32 for numerical stability in LayerNorm
+        x = hidden_states.float().mean(dim=1)      # [B, H], fp32
         x = self.norm(x)
         x = self.drop(x)
         x = self.act(self.proj(x))

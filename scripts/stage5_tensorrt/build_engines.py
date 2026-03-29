@@ -42,6 +42,7 @@ import subprocess
 import argparse
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 OUTPUT_JSON   = "/workspace/outputs/logs/stage5_trt_results.json"
 OUTPUT_REPORT = "/workspace/outputs/reports/stage5_tensorrt.md"
