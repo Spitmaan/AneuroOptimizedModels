@@ -335,7 +335,7 @@ def main():
     # Ensure any stale llama processes are gone before we start
     subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
     subprocess.run(["pkill", "-f", "llama-bench"], capture_output=True)
-    time.sleep(3)
+    time.sleep(15)  # Jetson UMA CUDA context needs time to fully release
 
     # Step 1: Speed
     print("[1/3] Throughput benchmark (llama-bench, 3 repetitions) ...")

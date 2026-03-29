@@ -16,6 +16,34 @@ Builds on Phase 1 (modelgarden) baselines with a 7-stage pipeline targeting prod
 | Llama-3.2-1B | 44.7 t/s | ~80.5 t/s | KIVI-4bit **1.88x** (est.) | — |
 | Qwen2.5-0.5B | — | — | KIVI-4bit **1.88x**, 30% ARC, 10% GSM8K | 26.7% → **53.3%** |
 
+### Edge Optimization Ladder (Phase 5 — llama.cpp host, v8510)
+
+Apple-to-apple comparison: every step measured simultaneously for throughput (pp512 t/s, tg128 t/s) and accuracy (GSM8K, ARC-Challenge), 20 samples each. An improvement requires both dimensions to hold.
+
+| Model | Config | pp512 t/s | tg128 t/s | GSM8K | ARC | vs Baseline |
+|-------|--------|----------:|----------:|------:|----:|-------------|
+| LFM2.5-1.2B | Baseline (Q4_K_M) | 1875 | 49.81 | 5% | 60% | — |
+| LFM2.5-1.2B | +Flash Attn | 2107 | 51.64 | 5% | 60% | +3.7% tg ✅ |
+| LFM2.5-1.2B | +FA+KV-q8 | 718 | 40.39 | 5% | 65% | Regression ❌ |
+| LFM2.5-1.2B | +FA+KV-q4+q4 | 2105 | 50.95 | 5% | 65% | Neutral |
+| **LFM2.5-1.2B** | **Q4_K_S+FA** | **2080** | **53.22** | **5%** | **70%** | **+6.8% tg, +10% ARC ✅** |
+| LFM2.5-1.2B | Q3_K_M+FA | 1934 | 39.48 | 0% | 45% | Worse both ❌ |
+| Llama-3.2-1B | Baseline (Q4_K_M) | 1639 | 44.64 | 0% | 35% | — |
+| Llama-3.2-1B | +Flash Attn | 2190 | 48.77 | 0% | 35% | +9.2% tg ✅ |
+| **Llama-3.2-1B** | **Q4_K_S+FA** | **2204** | **50.15** | **5%** | **35%** | **+12.3% tg ✅** |
+| Llama-3.2-1B | Q3_K_M+FA | 2004 | 39.25 | 5% | 25% | Worse both ❌ |
+| Qwen2.5-0.5B | Baseline (Q4_K_M) | 2684 | 80.24 | 0% | 40% | — |
+| Qwen2.5-0.5B | +Flash Attn | 3626 | 89.43 | 0% | 40% | +11.5% tg ✅ |
+| Qwen2.5-0.5B | Q4_K_S+FA | 3638 | 90.67 | 0% | 40% | Marginal |
+| **Qwen2.5-0.5B** | **Q3_K_M+FA** | **3721** | **93.92** | **5%** | **40%** | **+17% tg ✅** |
+
+**Key findings:**
+- Flash Attention (`-fa 1`) is a free win on all models (+3–12% tg, +12–35% pp)
+- Q4_K_S consistently beats Q4_K_M: smaller model = less memory bandwidth per token
+- Q3_K_M benefits only sub-1B models (0.5B): bandwidth gain > dequant cost; harmful for ≥1B
+- KV cache quantization (`-ctk q8_0`) regresses at 512-token context; neutral at q4_0+q4_0
+- CPU thread count has no effect at `-ngl 99` — GPU does all compute
+
 ---
 
 ## Stage 1 — Environment Verification
@@ -366,6 +394,41 @@ Aggregates all stage JSON outputs into a unified [Phase 5 Report](outputs/report
 - Per-stage summary tables
 - Technology attribution (papers, repos)
 - Production deployment recommendations
+
+---
+
+## Edge Optimization Ladder
+
+**Status: ✅ Complete (2026-03-29)**
+
+Systematic, practical optimization of all three models on Jetson Orin Nano 8GB using the llama.cpp host build (v8510). Each step changes exactly one thing and measures the full apple-to-apple result: prefill speed (pp512), generation speed (tg128), GSM8K accuracy, and ARC-Challenge accuracy.
+
+### Benchmark framework
+
+```bash
+# Run on Jetson HOST (not in container)
+python3 scripts/edge_optimization/bench_gguf.py \
+  --model /path/to/model.gguf \
+  --label "MyLabel" \
+  --flags "-fa 1"    # extra llama.cpp flags
+
+# Compare all results
+python3 scripts/edge_optimization/bench_gguf.py --compare
+```
+
+Results accumulate in `outputs/logs/edge_opt/results.json`.
+
+### Optimal deployment configs
+
+| Model | Command | tg128 t/s | ARC |
+|-------|---------|----------:|----:|
+| LFM2.5-1.2B | `llama-server -m LFM2.5-1.2B-Q4_K_S.gguf -ngl 99 -fa 1` | 53.22 | 70% |
+| Llama-3.2-1B | `llama-server -m Llama-3.2-1B-Q4_K_S.gguf -ngl 99 -fa 1` | 50.15 | 35% |
+| Qwen2.5-0.5B | `llama-server -m Qwen2.5-0.5B-Q3_K_M.gguf -ngl 99 -fa 1` | 93.92 | 40% |
+
+### Speculative decoding status
+
+LFM2-700M (potential draft for LFM2.5-1.2B) was tested but rejected by llama.cpp — token 128 differs between LFM2 and LFM2.5 tokenizers (`<|audio_start|>` vs `<|reserved_118|>`). No LFM2.5-700M exists. Speculative decoding is not achievable within the current model set.
 
 ---
 

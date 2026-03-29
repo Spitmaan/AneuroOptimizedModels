@@ -1,0 +1,338 @@
+[
+  {
+    "label": "LFM2.5-1.2B_Q4_K_M_Baseline",
+    "model": "LiquidAI_LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+    "flags": "",
+    "timestamp": "2026-03-29T17:24:15.629994",
+    "speed": {
+      "pp512": 1875.45,
+      "tg128": 49.81,
+      "pp_std": 83.75,
+      "tg_std": 0.08
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 5.0,
+        "correct": 1,
+        "total": 20
+      },
+      "arc": {
+        "score": 60.0,
+        "correct": 12,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "LFM2.5-1.2B_Q4_K_M_FlashAttn",
+    "model": "LiquidAI_LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T17:25:38.211363",
+    "speed": {
+      "pp512": 2106.8,
+      "tg128": 51.64,
+      "pp_std": 108.47,
+      "tg_std": 0.02
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 5.0,
+        "correct": 1,
+        "total": 20
+      },
+      "arc": {
+        "score": 60.0,
+        "correct": 12,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "LFM2.5-1.2B_Q4_K_M_FA_ctk-q8",
+    "model": "LiquidAI_LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+    "flags": "-fa 1 -ctk q8_0",
+    "timestamp": "2026-03-29T17:27:59.079770",
+    "speed": {
+      "pp512": 718.14,
+      "tg128": 40.39,
+      "pp_std": 47.42,
+      "tg_std": 0.43
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 5.0,
+        "correct": 1,
+        "total": 20
+      },
+      "arc": {
+        "score": 65.0,
+        "correct": 13,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "LFM2.5-1.2B_Q4_K_M_FA_ctk-q4-ctv-q4",
+    "model": "LiquidAI_LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+    "flags": "-fa 1 -ctk q4_0 -ctv q4_0",
+    "timestamp": "2026-03-29T17:28:35.987773",
+    "speed": {
+      "pp512": 2104.62,
+      "tg128": 50.95,
+      "pp_std": 111.86,
+      "tg_std": 1.0
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 5.0,
+        "correct": 1,
+        "total": 20
+      },
+      "arc": {
+        "score": 65.0,
+        "correct": 13,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "LFM2.5-1.2B_Q4_K_S_FA",
+    "model": "LiquidAI_LFM2.5-1.2B-Instruct-Q4_K_S.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T19:04:23.349763",
+    "speed": {
+      "pp512": 2079.6,
+      "tg128": 53.22,
+      "pp_std": 113.49,
+      "tg_std": 0.05
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 5.0,
+        "correct": 1,
+        "total": 20
+      },
+      "arc": {
+        "score": 70.0,
+        "correct": 14,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "LFM2.5-1.2B_Q3_K_M_FA",
+    "model": "LiquidAI_LFM2.5-1.2B-Instruct-Q3_K_M.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T19:05:14.954016",
+    "speed": {
+      "pp512": 1934.32,
+      "tg128": 39.48,
+      "pp_std": 59.27,
+      "tg_std": 0.01
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 0.0,
+        "correct": 0,
+        "total": 20
+      },
+      "arc": {
+        "score": 45.0,
+        "correct": 9,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "Qwen2.5-0.5B_Q4_K_M_Baseline",
+    "model": "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+    "flags": "",
+    "timestamp": "2026-03-29T19:06:14.499163",
+    "speed": {
+      "pp512": 2684.01,
+      "tg128": 80.24,
+      "pp_std": 328.1,
+      "tg_std": 0.36
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 0.0,
+        "correct": 0,
+        "total": 20
+      },
+      "arc": {
+        "score": 40.0,
+        "correct": 8,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "Qwen2.5-0.5B_Q4_K_M_FA",
+    "model": "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T19:07:14.417019",
+    "speed": {
+      "pp512": 3626.22,
+      "tg128": 89.43,
+      "pp_std": 711.42,
+      "tg_std": 0.42
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 0.0,
+        "correct": 0,
+        "total": 20
+      },
+      "arc": {
+        "score": 40.0,
+        "correct": 8,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "Qwen2.5-0.5B_Q4_K_S_FA",
+    "model": "Qwen2.5-0.5B-Instruct-Q4_K_S.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T19:07:38.386726",
+    "speed": {
+      "pp512": 3637.79,
+      "tg128": 90.67,
+      "pp_std": 723.53,
+      "tg_std": 0.33
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 0.0,
+        "correct": 0,
+        "total": 20
+      },
+      "arc": {
+        "score": 40.0,
+        "correct": 8,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "Qwen2.5-0.5B_Q3_K_M_FA",
+    "model": "Qwen2.5-0.5B-Instruct-Q3_K_M.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T19:08:24.231874",
+    "speed": {
+      "pp512": 3721.21,
+      "tg128": 93.92,
+      "pp_std": 290.16,
+      "tg_std": 1.1
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 5.0,
+        "correct": 1,
+        "total": 20
+      },
+      "arc": {
+        "score": 40.0,
+        "correct": 8,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "Llama-3.2-1B_Q4_K_M_FA",
+    "model": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T19:10:41.819172",
+    "speed": {
+      "pp512": 2189.84,
+      "tg128": 48.77,
+      "pp_std": 94.85,
+      "tg_std": 0.14
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 0.0,
+        "correct": 0,
+        "total": 20
+      },
+      "arc": {
+        "score": 35.0,
+        "correct": 7,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "Llama-3.2-1B_Q4_K_M_Baseline",
+    "model": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+    "flags": "",
+    "timestamp": "2026-03-29T19:37:14.080308",
+    "speed": {
+      "pp512": 1639.19,
+      "tg128": 44.64,
+      "pp_std": 61.03,
+      "tg_std": 0.03
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 0.0,
+        "correct": 0,
+        "total": 20
+      },
+      "arc": {
+        "score": 35.0,
+        "correct": 7,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "Llama-3.2-1B_Q4_K_S_FA",
+    "model": "Llama-3.2-1B-Instruct-Q4_K_S.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T19:42:56.101670",
+    "speed": {
+      "pp512": 2204.1,
+      "tg128": 50.15,
+      "pp_std": 155.15,
+      "tg_std": 0.06
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 5.0,
+        "correct": 1,
+        "total": 20
+      },
+      "arc": {
+        "score": 35.0,
+        "correct": 7,
+        "total": 20
+      }
+    }
+  },
+  {
+    "label": "Llama-3.2-1B_Q3_K_M_FA",
+    "model": "Llama-3.2-1B-Instruct-Q3_K_M.gguf",
+    "flags": "-fa 1",
+    "timestamp": "2026-03-29T19:52:52.036086",
+    "speed": {
+      "pp512": 2003.81,
+      "tg128": 39.25,
+      "pp_std": 114.09,
+      "tg_std": 0.03
+    },
+    "accuracy": {
+      "gsm8k": {
+        "score": 5.0,
+        "correct": 1,
+        "total": 20
+      },
+      "arc": {
+        "score": 25.0,
+        "correct": 5,
+        "total": 20
+      }
+    }
+  }
+]
