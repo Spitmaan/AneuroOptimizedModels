@@ -145,6 +145,12 @@ def apply_kv_compression(kv_cache, method, cache_type: str):
     return kv_cache
 
 
+def detect_cache_type_from_name(hf_id: str) -> str:
+    """Detect cache hook type from model ID — avoids a dummy forward pass."""
+    if "LFM" in hf_id or "lfm" in hf_id.lower():
+        return "lfm2"
+    return "dynamic"
+
 def detect_cache_type(kv_cache) -> str:
     name = type(kv_cache).__name__
     if "Lfm2" in name or "Hybrid" in name:
@@ -520,9 +526,10 @@ def generate_report(all_results: dict, n_tokens: int, n_samples: int):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+# Qwen runs first: stable 457 MB footprint. LFM2 second: needs clean CUDA state.
 MODELS = {
-    "lfm":  ("LiquidAI/LFM2.5-1.2B-Instruct",  "LFM2.5-1.2B"),
     "qwen": ("Qwen/Qwen2.5-0.5B-Instruct",       "Qwen2.5-0.5B"),
+    "lfm":  ("LiquidAI/LFM2.5-1.2B-Instruct",  "LFM2.5-1.2B"),
 }
 
 METHODS_ORDERED = ["Baseline", "PolarQuant", "KIVI-2bit", "KIVI-4bit", "QJL"]
@@ -566,14 +573,10 @@ def run_model(hf_id: str, label: str, methods: dict,
     vram_load = round(torch.cuda.memory_allocated() / 1e6, 1)
     print(f"  Loaded. VRAM: {vram_load} MB")
 
-    # Detect cache type from one dummy forward pass
-    ids = tok("Hello", return_tensors="pt").to(device)
-    with torch.no_grad():
-        out = model(**ids, use_cache=True)
-    cache_type      = detect_cache_type(out.past_key_values)
-    cache_type_name = type(out.past_key_values).__name__
+    # Detect cache type from model ID (avoids dummy forward pass that can OOM on LFM2)
+    cache_type      = detect_cache_type_from_name(hf_id)
+    cache_type_name = "Lfm2HybridConvCache" if cache_type == "lfm2" else "DynamicCache"
     print(f"  Cache type: {cache_type_name} → hook: '{cache_type}'")
-    del out; gc.collect(); torch.cuda.empty_cache()
 
     model_results = {
         "hf_id":        hf_id,
@@ -650,8 +653,23 @@ def main():
 
     for mk in model_keys:
         hf_id, label = MODELS[mk]
-        result = run_model(hf_id, label, methods, args)
-        all_results[label] = result
+        # Aggressive CUDA cleanup before each model to maximise free VRAM
+        gc.collect(); torch.cuda.empty_cache()
+        print(f"\n  Pre-run VRAM: {torch.cuda.memory_allocated()/1e6:.0f} MB allocated")
+        try:
+            result = run_model(hf_id, label, methods, args)
+            all_results[label] = result
+        except RuntimeError as e:
+            if "INTERNAL ASSERT" in str(e) or "CUDA" in str(e) or "out of memory" in str(e).lower():
+                print(f"\n  ❌ {label} CUDA OOM: {e}")
+                print(f"  Skipping {label} — Jetson UMA CUDA allocator limit hit.")
+                print(f"  Run this model first in a fresh container for accurate results.")
+                all_results[label] = {"hf_id": hf_id, "error": str(e)[:200],
+                                      "note": "CUDA OOM — run first in fresh container",
+                                      "methods": {}}
+            else:
+                raise
+            gc.collect(); torch.cuda.empty_cache()
 
     os.makedirs(os.path.dirname(OUTPUT_JSON), exist_ok=True)
     with open(OUTPUT_JSON, "w") as f:
