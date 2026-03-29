@@ -477,7 +477,12 @@ def benchmark_qjl(K: torch.Tensor, V: torch.Tensor) -> dict:
         ts = true_scores.reshape(-1).numpy() if hasattr(true_scores, 'numpy') else true_scores.reshape(-1)
         es = est_scores.reshape(-1).numpy() if hasattr(est_scores, 'numpy') else est_scores.reshape(-1)
         import numpy as np
-        corr = float(np.corrcoef(ts.detach().numpy(), es.detach().numpy())[0, 1])
+        # Convert to numpy (handle both torch.Tensor and np.ndarray)
+        def to_np(x):
+            if isinstance(x, torch.Tensor):
+                return x.detach().numpy()
+            return np.asarray(x)
+        corr = float(np.corrcoef(to_np(ts).ravel(), to_np(es).ravel())[0, 1])
 
         mem_ratio = qjl.memory_ratio(D)
 
