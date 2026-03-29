@@ -1,0 +1,88 @@
+{
+  "stage": "Stage 1 - Environment",
+  "results": {
+    "python_version": {
+      "ok": true,
+      "value": "3.10.12"
+    },
+    "platform": {
+      "ok": true,
+      "value": "aarch64 / Linux"
+    },
+    "pytorch_version": {
+      "ok": true,
+      "value": "2.10.0"
+    },
+    "cuda_available": {
+      "ok": true,
+      "value": "True (12.6)"
+    },
+    "gpu_device": {
+      "ok": true,
+      "value": "Orin \u2014 7.99 GB VRAM"
+    },
+    "cuda_max_alloc_gb": {
+      "ok": true,
+      "value": 3.0
+    },
+    "tensorrt_version": {
+      "ok": true,
+      "value": ""
+    },
+    "trt_llm_version": {
+      "ok": false,
+      "value": "No module named 'tensorrt_llm'",
+      "note": "Will build from source in Stage 5"
+    },
+    "trt_llm_source": {
+      "ok": true,
+      "value": "/workspace/TensorRT-LLM \u2014 1 py files"
+    },
+    "go_version": {
+      "ok": true,
+      "value": "go version go1.22.5 linux/arm64"
+    },
+    "gollama_cpp": {
+      "ok": true,
+      "value": "/go/src/github.com/dianlight/gollama.cpp/go.mod"
+    },
+    "lm_eval_version": {
+      "ok": true,
+      "value": "0.4.11"
+    },
+    "qjl_repo": {
+      "ok": true,
+      "value": "/workspace/repos/QJL \u2014 15 py files"
+    },
+    "kivi_repo": {
+      "ok": true,
+      "value": "/workspace/repos/KIVI \u2014 21 py files"
+    },
+    "transformers_version": {
+      "ok": true,
+      "value": "5.4.0"
+    },
+    "hf_hub": {
+      "ok": true,
+      "value": "OK (endpoint: https://huggingface.co)"
+    },
+    "jetson_power_mode": {
+      "ok": true,
+      "value": ""
+    },
+    "swap_memory": {
+      "ok": true,
+      "value": "Swap:           23Gi       315Mi        23Gi"
+    },
+    "system_memory": {
+      "ok": true,
+      "value": "Mem:           7.4Gi       2.0Gi       2.2Gi        27Mi       3.3Gi       5.0Gi"
+    }
+  },
+  "summary": {
+    "total": 19,
+    "passed": 18,
+    "warnings": 1,
+    "failed": 0
+  }
+}
