@@ -1,0 +1,179 @@
+{
+  "stage": "Stage 3 Comprehensive \u2014 KV Compression Full Benchmark",
+  "timestamp": "2026-03-29T20:37:15.600945",
+  "config": {
+    "n_tokens": 48,
+    "n_samples": 20,
+    "speed_only": false
+  },
+  "results": {
+    "LFM2.5-1.2B": {
+      "hf_id": "LiquidAI/LFM2.5-1.2B-Instruct",
+      "vram_load_mb": 803.3,
+      "cache_type": "Lfm2HybridConvCache",
+      "methods": {
+        "Baseline": {
+          "kv_ratio": "1.00x",
+          "speed_tps": 12.12,
+          "speed_vram_mb": 881.7,
+          "gsm8k": {
+            "score": 5.0,
+            "correct": 1,
+            "total": 20,
+            "tps_approx": 5.32,
+            "peak_vram_mb": 899.6
+          },
+          "arc": {
+            "score": 20.0,
+            "correct": 4,
+            "total": 20,
+            "peak_vram_mb": 941.0
+          }
+        },
+        "PolarQuant": {
+          "kv_ratio": "7.53x",
+          "speed_tps": 9.43,
+          "speed_vram_mb": 881.7,
+          "gsm8k": {
+            "score": 0.0,
+            "correct": 0,
+            "total": 20,
+            "tps_approx": 4.44,
+            "peak_vram_mb": 899.6
+          },
+          "arc": {
+            "score": 20.0,
+            "correct": 4,
+            "total": 20,
+            "peak_vram_mb": 941.0
+          }
+        },
+        "KIVI-2bit": {
+          "kv_ratio": "2.29x",
+          "speed_tps": 10.18,
+          "speed_vram_mb": 881.7,
+          "gsm8k": {
+            "score": 0.0,
+            "correct": 0,
+            "total": 20,
+            "tps_approx": 4.42,
+            "peak_vram_mb": 899.6
+          },
+          "arc": {
+            "score": 25.0,
+            "correct": 5,
+            "total": 20,
+            "peak_vram_mb": 941.0
+          }
+        },
+        "KIVI-4bit": {
+          "kv_ratio": "1.88x",
+          "speed_tps": 10.19,
+          "speed_vram_mb": 881.7,
+          "gsm8k": {
+            "score": 0.0,
+            "correct": 0,
+            "total": 20,
+            "tps_approx": 4.42,
+            "peak_vram_mb": 899.6
+          },
+          "arc": {
+            "score": 20.0,
+            "correct": 4,
+            "total": 20,
+            "peak_vram_mb": 941.0
+          }
+        },
+        "QJL": {
+          "kv_ratio": "16-64x",
+          "note": "Cannot integrate into generation loop without modifying attention kernel. QJL is a score estimator, not a KV reconstructor \u2014 using 1-bit sketch as K produces garbage.",
+          "pearson_r_dim64": 0.62
+        }
+      }
+    },
+    "Qwen2.5-0.5B": {
+      "hf_id": "Qwen/Qwen2.5-0.5B-Instruct",
+      "vram_load_mb": 466.0,
+      "cache_type": "DynamicCache",
+      "methods": {
+        "Baseline": {
+          "kv_ratio": "1.00x",
+          "speed_tps": 7.06,
+          "speed_vram_mb": 486.2,
+          "gsm8k": {
+            "score": 5.0,
+            "correct": 1,
+            "total": 20,
+            "tps_approx": 3.2,
+            "peak_vram_mb": 558.4
+          },
+          "arc": {
+            "score": 30.0,
+            "correct": 6,
+            "total": 20,
+            "peak_vram_mb": 651.6
+          }
+        },
+        "PolarQuant": {
+          "kv_ratio": "7.53x",
+          "speed_tps": 5.28,
+          "speed_vram_mb": 486.2,
+          "gsm8k": {
+            "score": 0.0,
+            "correct": 0,
+            "total": 20,
+            "tps_approx": 2.33,
+            "peak_vram_mb": 558.4
+          },
+          "arc": {
+            "score": 10.0,
+            "correct": 2,
+            "total": 20,
+            "peak_vram_mb": 651.6
+          }
+        },
+        "KIVI-2bit": {
+          "kv_ratio": "2.29x",
+          "speed_tps": 5.7,
+          "speed_vram_mb": 486.2,
+          "gsm8k": {
+            "score": 0.0,
+            "correct": 0,
+            "total": 20,
+            "tps_approx": 2.55,
+            "peak_vram_mb": 558.4
+          },
+          "arc": {
+            "score": 20.0,
+            "correct": 4,
+            "total": 20,
+            "peak_vram_mb": 651.6
+          }
+        },
+        "KIVI-4bit": {
+          "kv_ratio": "1.88x",
+          "speed_tps": 5.66,
+          "speed_vram_mb": 486.2,
+          "gsm8k": {
+            "score": 10.0,
+            "correct": 2,
+            "total": 20,
+            "tps_approx": 2.56,
+            "peak_vram_mb": 558.4
+          },
+          "arc": {
+            "score": 30.0,
+            "correct": 6,
+            "total": 20,
+            "peak_vram_mb": 651.6
+          }
+        },
+        "QJL": {
+          "kv_ratio": "16-64x",
+          "note": "Cannot integrate into generation loop without modifying attention kernel. QJL is a score estimator, not a KV reconstructor \u2014 using 1-bit sketch as K produces garbage.",
+          "pearson_r_dim64": 0.62
+        }
+      }
+    }
+  }
+}
