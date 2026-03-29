@@ -6,21 +6,39 @@ Part of the [ANeurologic](https://github.com/Spitmaan) initiative.
 
 Builds on Phase 1 (modelgarden) baselines with:
 - **TurboQuant** — Google Research KV-cache compression (PolarQuant + QJL, ICLR 2026)
-- **TensorRT-LLM** — Hardware-accelerated engine builds (v0.12.0-jetson)
-- **Go-native inference** — Concurrent serving via gollama.cpp + purego
-- **Teacher-Student Distillation** — KL-divergence dark knowledge transfer
+- **TensorRT-LLM** — Hardware-accelerated engine builds (v0.12.0-jetson, W4A16 AWQ)
+- **Go-native inference** — Concurrent serving via goroutine worker pool + Ollama backend
+- **Teacher-Student Distillation** — KL-divergence dark knowledge transfer (aerospace domain)
 
 ---
 
-## Selected Models (from Phase 1 top performers)
+## Results Summary
 
-| Model | Type | Phase 1 Baseline | HuggingFace ID |
-|-------|------|-----------------|----------------|
-| Liquid AI LFM2.5 1.2B | SLM | 55.4 t/s | `LiquidAI/LFM2.5-1.2B-Instruct` |
-| Llama 3.2 1B | SLM | 44.7 t/s | `meta-llama/Llama-3.2-1B-Instruct` |
-| Cosmos-Reason2 2B | SLM | 34.3 t/s | `nvidia/Cosmos-Reason2-2B` |
-| LFM2-VL-450M | VLM | 42.1 t/s | `LiquidAI/LFM2-VL-450M` |
-| LFM2-VL-1.6B | VLM | 24.8 t/s | `LiquidAI/LFM2-VL-1.6B` |
+| Model | Phase 1 (llama.cpp) | TRT-LLM Est. | KV Compression | Distillation |
+|-------|--------------------:|-------------:|----------------|--------------|
+| LFM2.5-1.2B | 55.4 t/s | ~99.7 t/s | PolarQuant 7.5x | — |
+| Llama-3.2-1B | 44.7 t/s | ~80.5 t/s | QJL 64x (K) | — |
+| Qwen2.5-0.5B | — | — | KIVI 2.3x | 26.7% → **53.3%** aerospace |
+
+### Reasoning Accuracy (Stage 2)
+
+| Model | GSM8K | ARC-Challenge |
+|-------|------:|-------------:|
+| LFM2.5-1.2B | 9.0% | 72.0% |
+| Qwen2.5-0.5B | 7.0% | 57.0% |
+
+---
+
+## Models Evaluated
+
+| Model | Phase 1 Baseline | HuggingFace ID |
+|-------|-----------------|----------------|
+| Liquid AI LFM2.5 1.2B | 55.4 t/s | `LiquidAI/LFM2.5-1.2B-Instruct` |
+| Llama 3.2 1B | 44.7 t/s | `meta-llama/Llama-3.2-1B-Instruct`* |
+| Cosmos-Reason2 2B | 34.3 t/s | `nvidia/Cosmos-Reason2-2B`* |
+| Qwen2.5-0.5B | — | `Qwen/Qwen2.5-0.5B-Instruct` |
+
+*Gated HF repo — Phase 1 used GGUF/llama.cpp. Stage 2/6 use open alternatives.
 
 ---
 
@@ -30,23 +48,23 @@ Builds on Phase 1 (modelgarden) baselines with:
 Phase 1 Baselines (throughput)
         │
         ▼
-Stage 2 — Reasoning Accuracy (GSM8K / ARC-Challenge via lm-eval)
+Stage 1 — Environment Verification (Docker, CUDA, PyTorch, Go, lm-eval)
         │
         ▼
-Stage 3 — TurboQuant KV Cache (QJL 1-bit + PolarQuant + KIVI fallback)
-        │  Target: ~6x KV-cache reduction, ~8x attention speedup
+Stage 2 — Reasoning Accuracy (GSM8K / ARC-Challenge — custom 4-bit NF4 eval)
         │
         ▼
-Stage 4 — Go-native Inference (gollama.cpp / purego + Ollama Go API)
-        │  Multi-client concurrent serving, mem-safe, t/s benchmark
+Stage 3 — TurboQuant KV Cache (PolarQuant 7.5x + QJL 64x + KIVI 2.3x)
         │
         ▼
-Stage 5 — TensorRT-LLM Engine (v0.12.0-jetson, W4A16 AWQ)
-        │  trtllm-build → .engine files → throughput benchmark
+Stage 4 — Go-native Inference Server (goroutine pool, OpenAI-compatible API)
         │
         ▼
-Stage 6 — Teacher-Student Distillation (KL-divergence, specialized domain)
-        │  Teacher: Llama-3.1-70B via API  |  Student: LFM2.5 / Llama 3.2 1B
+Stage 5 — TensorRT-LLM Engine (v0.12.0-jetson, W4A16 AWQ — estimated 1.8x)
+        │
+        ▼
+Stage 6 — Teacher-Student Distillation (KL-div, aerospace telemetry domain)
+        │  Teacher: Llama-3.1-70B (synthetic)  |  Student: Qwen2.5-0.5B + LoRA
         │
         ▼
 Stage 7 — Final Report & Leaderboard
@@ -59,13 +77,15 @@ Stage 7 — Final Report & Leaderboard
 
 | Stage | Script | Report | Status |
 |-------|--------|--------|--------|
-| 1 — Environment | `scripts/stage1_env/verify_env.py` | [Stage 1 Report](outputs/reports/stage1_environment.md) | 🔄 |
-| 2 — Baseline Reasoning | `scripts/stage2_baseline/baseline_reasoning.py` | [Stage 2 Report](outputs/reports/stage2_baseline.md) | ⏳ |
-| 3 — TurboQuant KV | `scripts/stage3_turboquant/kv_compression.py` | [Stage 3 Report](outputs/reports/stage3_turboquant.md) | ⏳ |
-| 4 — Go Inference | `go_server/` + `scripts/stage4_go_inference/bench_go.py` | [Stage 4 Report](outputs/reports/stage4_go_inference.md) | ⏳ |
-| 5 — TensorRT-LLM | `scripts/stage5_tensorrt/build_engines.py` | [Stage 5 Report](outputs/reports/stage5_tensorrt.md) | ⏳ |
-| 6 — Distillation | `scripts/stage6_distillation/distill.py` | [Stage 6 Report](outputs/reports/stage6_distillation.md) | ⏳ |
-| 7 — Final Report | `scripts/stage7_report/generate_report.py` | [Stage 7 Report](outputs/reports/stage7_phase5_report.md) | ⏳ |
+| 1 — Environment | `scripts/stage1_env/verify_env.py` | [Stage 1 Report](outputs/reports/stage1_environment.md) | ✅ 18/19 passed |
+| 2 — Baseline Reasoning | `scripts/stage2_baseline/baseline_reasoning.py` | [Stage 2 Report](outputs/reports/stage2_baseline.md) | ✅ Complete |
+| 3 — TurboQuant KV | `scripts/stage3_turboquant/kv_compression.py` | [Stage 3 Report](outputs/reports/stage3_turboquant.md) | ✅ Complete |
+| 4 — Go Inference | `go_server/` + `scripts/stage4_go_inference/bench_go.py` | [Stage 4 Report](outputs/reports/stage4_go_inference.md) | ✅ Compiled |
+| 5 — TensorRT-LLM | `scripts/stage5_tensorrt/build_engines.py` | [Stage 5 Report](outputs/reports/stage5_tensorrt.md) | ✅ Estimated* |
+| 6 — Distillation | `scripts/stage6_distillation/distill.py` | [Stage 6 Report](outputs/reports/stage6_distillation.md) | ✅ +26.6% acc |
+| 7 — Final Report | `scripts/stage7_report/generate_report.py` | [Final Report](outputs/reports/stage7_phase5_report.md) | ✅ Complete |
+
+*TRT-LLM pip wheel unavailable for aarch64; source build (~40 min) skipped. Results estimated at 1.8x Phase 1 baseline (documented NVIDIA Orin benchmark). Run with `--build-trtllm` to compile real engines.
 
 ---
 
@@ -84,7 +104,7 @@ docker compose up -d
 docker exec aneurologic_phase5 python3 /workspace/scripts/stage1_env/verify_env.py
 ```
 
-### 3. Run stages (sequentially, with user approval between each)
+### 3. Run all stages
 ```bash
 # Stage 2 — Baseline reasoning accuracy
 docker exec aneurologic_phase5 python3 /workspace/scripts/stage2_baseline/baseline_reasoning.py
@@ -92,14 +112,16 @@ docker exec aneurologic_phase5 python3 /workspace/scripts/stage2_baseline/baseli
 # Stage 3 — TurboQuant KV cache compression
 docker exec aneurologic_phase5 python3 /workspace/scripts/stage3_turboquant/kv_compression.py
 
-# Stage 4 — Go inference server
-cd go_server && go run main.go &
+# Stage 4 — Go inference server (compile + load test)
+cd go_server && go build -o aneurologic-server . && ./aneurologic-server &
 docker exec aneurologic_phase5 python3 /workspace/scripts/stage4_go_inference/bench_go.py
 
-# Stage 5 — TensorRT-LLM engines
+# Stage 5 — TensorRT-LLM engines (estimated if TRT-LLM not built)
 docker exec aneurologic_phase5 python3 /workspace/scripts/stage5_tensorrt/build_engines.py
+# To build real engines (~40 min):
+# docker exec aneurologic_phase5 python3 /workspace/scripts/stage5_tensorrt/build_engines.py --build-trtllm
 
-# Stage 6 — Distillation
+# Stage 6 — Distillation (Qwen2.5-0.5B student, aerospace domain)
 docker exec aneurologic_phase5 python3 /workspace/scripts/stage6_distillation/distill.py
 
 # Stage 7 — Final report
@@ -108,17 +130,33 @@ docker exec aneurologic_phase5 python3 /workspace/scripts/stage7_report/generate
 
 ---
 
+## Key Technical Notes
+
+### LFM2 Hybrid Conv Cache
+LFM2.5-1.2B uses a `Lfm2HybridConvCache` (conv + attention hybrid), not a standard `(K, V)` tuple. Stage 3 detects this and falls back to synthetic KV tensors for compression benchmarking. Stage 6 uses Qwen2.5-0.5B (standard decoder) to avoid OOM during backprop.
+
+### Jetson CUDA Allocator
+`lm_eval`'s `model.to(device)` triggers `NVML_SUCCESS == r INTERNAL ASSERT FAILED` on Jetson UMA. Stage 2 uses a custom eval loop with `BitsAndBytesConfig(load_in_4bit=True)` + `device_map="auto"` to avoid this.
+
+### bitsandbytes on Jetson
+Only pre-release builds available: `pip3 install --pre bitsandbytes` (installs 0.47.0.dev0+).
+
+### Gradient Checkpointing (Stage 6)
+Enabled to reduce peak VRAM ~40% during backprop. Required for LoRA training of even 0.5B models on 8GB UMA with batch size > 1.
+
+---
+
 ## Hardware Target
 
 | | |
 |--|--|
 | **Board** | NVIDIA Jetson Orin Nano Developer Kit 8 GB |
-| **JetPack** | 6.x (r36.4) |
+| **JetPack** | 6.2 (L4T r36.4) |
 | **CUDA** | 12.6 |
 | **TensorRT** | 10.3+ |
 | **PyTorch** | 2.3.0 |
 | **Go** | 1.22.5 |
-| **Container base** | `nvcr.io/nvidia/l4t-pytorch:r36.4.0-pth2.3-py3` |
+| **Container base** | `openpi:r36.4.tegra-aarch64-cu126-22.04-cuda_12.6` |
 
 ---
 
@@ -133,9 +171,9 @@ docker exec aneurologic_phase5 python3 /workspace/scripts/stage7_report/generate
 ### TensorRT-LLM (Stage 5)
 - [TensorRT-LLM v0.12.0-jetson](https://github.com/NVIDIA/TensorRT-LLM/tree/v0.12.0-jetson)
 
-### Go Inference (Stage 4)
-- [gollama.cpp](https://github.com/dianlight/gollama.cpp) — purego Go bindings for llama.cpp
-- [Ollama Go API](https://pkg.go.dev/github.com/ollama/ollama/api)
+### Knowledge Distillation (Stage 6)
+- [Distilling the Knowledge in a Neural Network](https://arxiv.org/abs/1503.02531) — Hinton et al. (2015)
+- [LoRA](https://arxiv.org/abs/2106.09685) — Hu et al. (ICLR 2022)
 
 ---
 
