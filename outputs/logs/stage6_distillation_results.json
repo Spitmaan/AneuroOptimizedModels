@@ -1,0 +1,59 @@
+{
+  "stage": "Stage 6 - Knowledge Distillation",
+  "timestamp": "2026-03-29T00:42:48.611810",
+  "config": {
+    "epochs": 5,
+    "lr": 0.0001,
+    "temperature": 4.0,
+    "alpha": 0.7
+  },
+  "results": {
+    "Qwen2.5-0.5B": {
+      "before_acc": 26.67,
+      "after_acc": 53.33,
+      "improvement": 26.66,
+      "final_loss": 0.3549,
+      "final_kl": 0.0455,
+      "epoch_logs": [
+        {
+          "epoch": 1,
+          "loss": 0.4027,
+          "kl_loss": 0.0811,
+          "ce_loss": 1.1532,
+          "accuracy": 26.67
+        },
+        {
+          "epoch": 2,
+          "loss": 0.3803,
+          "kl_loss": 0.0593,
+          "ce_loss": 1.1294,
+          "accuracy": 26.67
+        },
+        {
+          "epoch": 3,
+          "loss": 0.3636,
+          "kl_loss": 0.0484,
+          "ce_loss": 1.0991,
+          "accuracy": 26.67
+        },
+        {
+          "epoch": 4,
+          "loss": 0.3607,
+          "kl_loss": 0.0477,
+          "ce_loss": 1.0911,
+          "accuracy": 40.0
+        },
+        {
+          "epoch": 5,
+          "loss": 0.3549,
+          "kl_loss": 0.0455,
+          "ce_loss": 1.0768,
+          "accuracy": 40.0
+        }
+      ],
+      "trainable_params": 657667,
+      "n_samples": 15,
+      "teacher": "meta-llama/Llama-3.1-70B-Instruct-Turbo"
+    }
+  }
+}

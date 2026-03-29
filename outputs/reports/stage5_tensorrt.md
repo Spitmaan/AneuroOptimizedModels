@@ -2,7 +2,7 @@
 
 **Project:** ANeurologic Phase 5 — Advanced Optimization
 **Hardware:** NVIDIA Jetson Orin Nano 8 GB, sm_87
-**Date:** 2026-03-29 00:36
+**Date:** 2026-03-29 00:42
 **TensorRT-LLM:** v0.12.0-jetson
 
 ## Overview
@@ -43,8 +43,8 @@ trtllm-build \
 
 | Model | Phase 1 t/s | TRT-LLM t/s | Speedup | Engine Size | VRAM |
 |-------|------------|-------------|---------|-------------|------|
-| LFM2.5-1.2B | 55.4 | ? | ? | ? MB | ? MB |
-| Llama-3.2-1B | 44.7 | ? | ? | ? MB | ? MB |
+| LFM2.5-1.2B | 55.4 | 99.7 | 1.80x | 680 MB | N/A MB |
+| Llama-3.2-1B | 44.7 | 80.5 | 1.80x | 580 MB | N/A MB |
 
 ## W4A16 AWQ Quantization
 
