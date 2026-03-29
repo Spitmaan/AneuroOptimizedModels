@@ -1,0 +1,74 @@
+{
+  "stage": "Stage 3b - KV Compression Performance",
+  "timestamp": "2026-03-29T18:55:54.639017",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "config": {
+    "n_tokens": 48,
+    "n_samples": 20,
+    "speed_only": false
+  },
+  "stage2_baselines": {
+    "Qwen2.5-0.5B": {
+      "gsm8k": 7.0,
+      "arc_challenge": 57.0
+    }
+  },
+  "results": {
+    "Baseline": {
+      "tps": 7.27,
+      "vram_delta_mb": 18.7,
+      "gsm8k": {
+        "correct": 1,
+        "total": 20,
+        "score": 5.0
+      },
+      "arc": {
+        "correct": 6,
+        "total": 20,
+        "score": 30.0
+      }
+    },
+    "PolarQuant": {
+      "tps": 5.45,
+      "vram_delta_mb": 18.7,
+      "gsm8k": {
+        "correct": 0,
+        "total": 20,
+        "score": 0.0
+      },
+      "arc": {
+        "correct": 2,
+        "total": 20,
+        "score": 10.0
+      }
+    },
+    "KIVI-2bit": {
+      "tps": 5.8,
+      "vram_delta_mb": 18.7,
+      "gsm8k": {
+        "correct": 0,
+        "total": 20,
+        "score": 0.0
+      },
+      "arc": {
+        "correct": 5,
+        "total": 20,
+        "score": 25.0
+      }
+    },
+    "KIVI-4bit": {
+      "tps": 5.74,
+      "vram_delta_mb": 18.7,
+      "gsm8k": {
+        "correct": 2,
+        "total": 20,
+        "score": 10.0
+      },
+      "arc": {
+        "correct": 6,
+        "total": 20,
+        "score": 30.0
+      }
+    }
+  }
+}
