@@ -1,0 +1,200 @@
+{
+  "stage": "Stage 3 - TurboQuant KV Compression",
+  "timestamp": "2026-03-29T00:35:06.251485",
+  "config": {
+    "method": "all",
+    "seq_len": 256
+  },
+  "results": [
+    {
+      "model_id": "LiquidAI/LFM2.5-1.2B-Instruct",
+      "label": "LFM2.5-1.2B",
+      "kv_info": {
+        "n_layers": 1,
+        "total_kv_mb": 0.524288,
+        "peak_load_mb": 2340.686848,
+        "k_shape": [
+          1,
+          8,
+          256,
+          64
+        ]
+      },
+      "polarquant": {
+        "K": {
+          "compress_ms": 14.65,
+          "decomp_ms": 0.87,
+          "rmse": 0.411272,
+          "cosine_sim": 0.915748,
+          "theoretical_ratio": 7.53,
+          "actual_ratio": 7.53,
+          "orig_bytes": 262144
+        },
+        "V": {
+          "compress_ms": 1.24,
+          "decomp_ms": 0.52,
+          "rmse": 0.408796,
+          "cosine_sim": 0.915919,
+          "theoretical_ratio": 7.53,
+          "actual_ratio": 7.53,
+          "orig_bytes": 262144
+        }
+      },
+      "qjl": {
+        "sketch_dim_16": {
+          "sketch_dim": 16,
+          "compress_ms": 1.6,
+          "score_est_ms": 4.12,
+          "score_pearson_r": 0.3662,
+          "memory_ratio": 64.0,
+          "k_bits_per_head": 16
+        },
+        "sketch_dim_32": {
+          "sketch_dim": 32,
+          "compress_ms": 1.62,
+          "score_est_ms": 5.99,
+          "score_pearson_r": 0.4904,
+          "memory_ratio": 32.0,
+          "k_bits_per_head": 32
+        },
+        "sketch_dim_64": {
+          "sketch_dim": 64,
+          "compress_ms": 1.77,
+          "score_est_ms": 4.87,
+          "score_pearson_r": 0.6216,
+          "memory_ratio": 16.0,
+          "k_bits_per_head": 64
+        }
+      },
+      "kivi": {
+        "kivi_2bit": {
+          "K": {
+            "compress_ms": 5.98,
+            "decomp_ms": 2.6,
+            "rmse": 0.392056,
+            "cosine_sim": 0.931862,
+            "memory_ratio": 2.29
+          },
+          "V": {
+            "compress_ms": 5.34,
+            "decomp_ms": 2.96,
+            "rmse": 0.389798,
+            "cosine_sim": 0.931897,
+            "memory_ratio": 2.29
+          }
+        },
+        "kivi_4bit": {
+          "K": {
+            "compress_ms": 5.31,
+            "decomp_ms": 2.98,
+            "rmse": 0.077844,
+            "cosine_sim": 0.99694,
+            "memory_ratio": 1.88
+          },
+          "V": {
+            "compress_ms": 2.89,
+            "decomp_ms": 1.57,
+            "rmse": 0.07755,
+            "cosine_sim": 0.996931,
+            "memory_ratio": 1.88
+          }
+        }
+      }
+    },
+    {
+      "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+      "label": "Qwen2.5-0.5B",
+      "kv_info": {
+        "n_layers": 1,
+        "total_kv_mb": 0.524288,
+        "peak_load_mb": 2388.77952,
+        "k_shape": [
+          1,
+          8,
+          256,
+          64
+        ]
+      },
+      "polarquant": {
+        "K": {
+          "compress_ms": 6.33,
+          "decomp_ms": 0.84,
+          "rmse": 0.410252,
+          "cosine_sim": 0.915243,
+          "theoretical_ratio": 7.53,
+          "actual_ratio": 7.53,
+          "orig_bytes": 262144
+        },
+        "V": {
+          "compress_ms": 1.54,
+          "decomp_ms": 0.45,
+          "rmse": 0.413316,
+          "cosine_sim": 0.914495,
+          "theoretical_ratio": 7.53,
+          "actual_ratio": 7.53,
+          "orig_bytes": 262144
+        }
+      },
+      "qjl": {
+        "sketch_dim_16": {
+          "sketch_dim": 16,
+          "compress_ms": 6.85,
+          "score_est_ms": 1.63,
+          "score_pearson_r": 0.3684,
+          "memory_ratio": 64.0,
+          "k_bits_per_head": 16
+        },
+        "sketch_dim_32": {
+          "sketch_dim": 32,
+          "compress_ms": 1.31,
+          "score_est_ms": 3.84,
+          "score_pearson_r": 0.4912,
+          "memory_ratio": 32.0,
+          "k_bits_per_head": 32
+        },
+        "sketch_dim_64": {
+          "sketch_dim": 64,
+          "compress_ms": 1.39,
+          "score_est_ms": 6.07,
+          "score_pearson_r": 0.621,
+          "memory_ratio": 16.0,
+          "k_bits_per_head": 64
+        }
+      },
+      "kivi": {
+        "kivi_2bit": {
+          "K": {
+            "compress_ms": 6.38,
+            "decomp_ms": 2.94,
+            "rmse": 0.391814,
+            "cosine_sim": 0.930592,
+            "memory_ratio": 2.29
+          },
+          "V": {
+            "compress_ms": 3.38,
+            "decomp_ms": 1.86,
+            "rmse": 0.392567,
+            "cosine_sim": 0.931155,
+            "memory_ratio": 2.29
+          }
+        },
+        "kivi_4bit": {
+          "K": {
+            "compress_ms": 3.49,
+            "decomp_ms": 1.83,
+            "rmse": 0.077983,
+            "cosine_sim": 0.996881,
+            "memory_ratio": 1.88
+          },
+          "V": {
+            "compress_ms": 3.44,
+            "decomp_ms": 1.86,
+            "rmse": 0.078182,
+            "cosine_sim": 0.996888,
+            "memory_ratio": 1.88
+          }
+        }
+      }
+    }
+  ]
+}
