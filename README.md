@@ -400,6 +400,11 @@ Aggregates all stage JSON outputs into a unified [Phase 5 Report](outputs/report
 ## Edge Optimization Ladder
 
 **Status: ✅ Complete (2026-03-29)**
+**Full report:** [outputs/reports/edge_optimization_report.md](outputs/reports/edge_optimization_report.md)
+
+### Classification — Why This Is Distinct from Stage 3
+
+Stage 3 (TurboQuant) applied Python-level KV cache compression algorithms (KIVI, PolarQuant, QJL) **inside the Docker container** using PyTorch attention hooks. The edge optimization ladder runs **llama.cpp binary directly on the Jetson host**, tuning model weight quantization formats (Q4_K_S, Q3_K_M), inference compute (Flash Attention), and runtime KV quantization via CUDA kernel flags. The scope is broader (model weights + compute + KV, not just KV), the runtime is different (C++ vs Python), and the measurement unit is different (standard llama-bench pp512/tg128 vs custom throughput harness). The conceptual overlap — KV cache quantization — shares the same idea as Stage 3's KIVI but is implemented as a flag to a CUDA kernel, not as a Python tensor hook.
 
 Systematic, practical optimization of all three models on Jetson Orin Nano 8GB using the llama.cpp host build (v8510). Each step changes exactly one thing and measures the full apple-to-apple result: prefill speed (pp512), generation speed (tg128), GSM8K accuracy, and ARC-Challenge accuracy.
 
