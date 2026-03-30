@@ -351,9 +351,19 @@ Each benchmark run records one JSON entry in `outputs/logs/edge_opt/results.json
 
 ---
 
-## 5. Methods Tested
+## 5. Methods Tested — Completed Stages (I–VII)
 
-### 5.1 Method: Flash Attention (`-fa 1`)
+Each stage below changes exactly one variable from the previous winner and measures all four metrics simultaneously. Stages are numbered in Roman numerals as a new series independent of the Stages 1–7 Docker pipeline.
+
+### Stage I — Baseline
+
+**Config:** Q4_K_M, no extra flags
+**Purpose:** Establish the reproducible reference point under the host llama.cpp build (v8510). All subsequent stages are compared against this.
+**Key question answered:** What is the true host-build tg128 for each model? (The previously quoted 55.4 t/s for LFM2.5-1.2B came from a different build; reproducible host baseline is 49.81 t/s.)
+
+---
+
+### Stage II — Flash Attention (`-fa 1`)
 
 **What it is:** Flash Attention 2 (Dao et al., 2022; arXiv:2205.14135) reformulates self-attention computation to avoid materializing the full N×N attention score matrix in global GPU memory. Instead, it tiles the computation to fit in GPU SRAM (shared memory/L1 cache), which is ~100× faster than global memory.
 
@@ -369,7 +379,7 @@ Each benchmark run records one JSON entry in `outputs/logs/edge_opt/results.json
 
 ---
 
-### 5.2 Method: KV Cache Quantization via `-ctk` and `-ctv`
+### Stage III — KV Cache Quantization via `-ctk` and `-ctv`
 
 **What it is:** llama.cpp implements KV cache quantization as CUDA kernels that compress Key and/or Value tensors after computation and decompress them before use. This is the runtime equivalent of Stage 3's KIVI approach, but integrated into the C++ inference loop rather than applied as Python hooks.
 
@@ -384,9 +394,14 @@ Each benchmark run records one JSON entry in `outputs/logs/edge_opt/results.json
 
 **Why only at 512-token context?** At 512 tokens, the KV cache is tiny (a few MB at most). There is no memory pressure from the KV cache. The compression adds compute overhead (quantize after write, dequantize before read) without providing meaningful memory savings at this context length. KV cache quantization becomes beneficial only at 4K+ token contexts where the KV cache grows large enough to cause memory pressure or bandwidth saturation.
 
+**KV types available in llama.cpp v8510** (all whitelisted for `-ctk`/`-ctv`):
+`f32`, `f16` (default), `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1`
+
+Tested in Stage III: `q8_0` and `q4_0`. Not yet tested: `q4_1`, `iq4_nl`, `q5_0`, `q5_1` — see Stage VIII in the roadmap.
+
 ---
 
-### 5.3 Method: Model Weight Quantization Format (Q4_K_S, Q3_K_M)
+### Stage IV — Model Weight Quantization Format — Q4_K_S (WINNER)
 
 **What it is:** Changing the quantization format of the model weights themselves. Unlike KV cache quantization (which affects runtime KV tensors), this changes the stored file and affects every forward pass.
 
@@ -403,9 +418,19 @@ llama-quantize --allow-requantize SOURCE_Q4_K_M.gguf DEST_Q3_K_M.gguf Q3_K_M
 
 **Quality loss from re-quantization:** The source Q4_K_M files already lost precision when first quantized from F16. Re-quantizing from Q4_K_M (rather than F16) applies a second quantization loss on top. The actual accuracy impact is small for Q4_K_S (higher precision) but more pronounced for Q3_K_M.
 
+**Result:** Q4_K_S + FA is the best configuration across all models (or best for ≥1B models; Qwen 0.5B is covered by Stage V).
+
 ---
 
-### 5.4 Method: CPU Thread Count (`-t 6`)
+### Stage V — Model Weight Quantization Format — Q3_K_M (FAILED for ≥1B)
+
+**What changed from Stage IV:** Model file changed from Q4_K_S (~4.8 BPW) to Q3_K_M (~4.2 BPW). Same `-fa 1` flag.
+
+**Finding:** Q3_K_M is slower AND less accurate for LFM2.5-1.2B and Llama-3.2-1B due to dequantization compute overhead exceeding bandwidth savings. However, it **works** for Qwen2.5-0.5B (+17% tg, flat accuracy) because the smaller model has lower bandwidth pressure — the arithmetic savings from loading fewer bytes outweigh the dequantization cost for sub-1B models.
+
+---
+
+### Stage VI — CPU Thread Count (`-t 6`)
 
 **What it is:** Setting the number of CPU threads used for tokenization and any CPU-side computation.
 
@@ -413,9 +438,11 @@ llama-quantize --allow-requantize SOURCE_Q4_K_M.gguf DEST_Q3_K_M.gguf Q3_K_M
 
 **Why expected to have no effect:** With `-ngl 99`, all model layers are offloaded to the GPU. The CPU handles only tokenization (fast, trivially parallelizable) and the Python subprocess interface. There is no matrix multiplication on CPU.
 
+**Finding:** Confirmed zero effect. `-t` flag is irrelevant at full GPU offload.
+
 ---
 
-### 5.5 Method: Speculative Decoding with LFM2-700M Draft
+### Stage VII — Speculative Decoding with LFM2-700M Draft (BLOCKED)
 
 **What it is:** Speculative decoding (Leviathan et al., 2023) uses a small "draft" model to propose multiple candidate tokens in one step. A larger "target" model then verifies all candidates in a single forward pass. If the target agrees with the draft's tokens, all are accepted simultaneously — achieving >1 token per target model call.
 
@@ -456,14 +483,14 @@ All timestamps are UTC-4 (Eastern Daylight Time), 2026-03-29.
 
 ### 6.1 LFM2.5-1.2B — Full Optimization Ladder
 
-| Step | Label | llama.cpp Flags | pp512 t/s | pp_std | tg128 t/s | tg_std | GSM8K | ARC | tg vs Baseline | ARC vs Baseline |
-|------|-------|----------------|----------:|-------:|----------:|-------:|------:|----:|---------------:|----------------:|
-| 0 | Baseline | *(none)* | 1875.45 | ±83.75 | **49.81** | ±0.08 | 5.0% (1/20) | 60.0% (12/20) | — | — |
-| 1 | Flash Attn | `-fa 1` | 2106.80 | ±108.47 | **51.64** | ±0.02 | 5.0% (1/20) | 60.0% (12/20) | +3.7% ✅ | 0% |
-| 2a | FA + KV-K-q8 | `-fa 1 -ctk q8_0` | 718.14 | ±47.42 | **40.39** | ±0.43 | 5.0% (1/20) | 65.0% (13/20) | **−19.0% ❌** | +5% |
-| 2b | FA + KV-KV-q4 | `-fa 1 -ctk q4_0 -ctv q4_0` | 2104.62 | ±111.86 | **50.95** | ±1.00 | 5.0% (1/20) | 65.0% (13/20) | −1.7% | +5% |
-| 3 | Q4_K_S + FA | `-fa 1` (Q4_K_S file) | 2079.60 | ±113.49 | **53.22** | ±0.05 | 5.0% (1/20) | 70.0% (14/20) | **+6.8% ✅** | **+10% ✅** |
-| 4 | Q3_K_M + FA | `-fa 1` (Q3_K_M file) | 1934.32 | ±59.27 | **39.48** | ±0.01 | 0.0% (0/20) | 45.0% (9/20) | **−20.7% ❌** | **−25% ❌** |
+| Stage | Label | llama.cpp Flags | pp512 t/s | pp_std | tg128 t/s | tg_std | GSM8K | ARC | tg vs Baseline | ARC vs Baseline |
+|-------|-------|----------------|----------:|-------:|----------:|-------:|------:|----:|---------------:|----------------:|
+| **I** | Baseline | *(none)* | 1875.45 | ±83.75 | **49.81** | ±0.08 | 5.0% (1/20) | 60.0% (12/20) | — | — |
+| **II** | Flash Attn | `-fa 1` | 2106.80 | ±108.47 | **51.64** | ±0.02 | 5.0% (1/20) | 60.0% (12/20) | +3.7% ✅ | 0% |
+| **IIIa** | FA + KV-K-q8 | `-fa 1 -ctk q8_0` | 718.14 | ±47.42 | **40.39** | ±0.43 | 5.0% (1/20) | 65.0% (13/20) | **−19.0% ❌** | +5% |
+| **IIIb** | FA + KV-KV-q4 | `-fa 1 -ctk q4_0 -ctv q4_0` | 2104.62 | ±111.86 | **50.95** | ±1.00 | 5.0% (1/20) | 65.0% (13/20) | −1.7% | +5% |
+| **IV** ★ | Q4_K_S + FA | `-fa 1` (Q4_K_S file) | 2079.60 | ±113.49 | **53.22** | ±0.05 | 5.0% (1/20) | 70.0% (14/20) | **+6.8% ✅** | **+10% ✅** |
+| **V** | Q3_K_M + FA | `-fa 1` (Q3_K_M file) | 1934.32 | ±59.27 | **39.48** | ±0.01 | 0.0% (0/20) | 45.0% (9/20) | **−20.7% ❌** | **−25% ❌** |
 
 **Winner: Step 3 — Q4_K_S + Flash Attention**
 - Generation speed: 53.22 t/s (+6.8% vs baseline)
@@ -472,12 +499,12 @@ All timestamps are UTC-4 (Eastern Daylight Time), 2026-03-29.
 
 ### 6.2 Llama-3.2-1B — Full Optimization Ladder
 
-| Step | Label | llama.cpp Flags | pp512 t/s | pp_std | tg128 t/s | tg_std | GSM8K | ARC | tg vs Baseline | ARC vs Baseline |
-|------|-------|----------------|----------:|-------:|----------:|-------:|------:|----:|---------------:|----------------:|
-| 0 | Baseline | *(none)* | 1639.19 | ±61.03 | **44.64** | ±0.03 | 0.0% (0/20) | 35.0% (7/20) | — | — |
-| 1 | Flash Attn | `-fa 1` | 2189.84 | ±94.85 | **48.77** | ±0.14 | 0.0% (0/20) | 35.0% (7/20) | +9.2% ✅ | 0% |
-| 2 | Q4_K_S + FA | `-fa 1` (Q4_K_S file) | 2204.10 | ±155.15 | **50.15** | ±0.06 | 5.0% (1/20) | 35.0% (7/20) | **+12.3% ✅** | 0% |
-| 3 | Q3_K_M + FA | `-fa 1` (Q3_K_M file) | 2003.81 | ±114.09 | **39.25** | ±0.03 | 5.0% (1/20) | 25.0% (5/20) | **−12.1% ❌** | **−10% ❌** |
+| Stage | Label | llama.cpp Flags | pp512 t/s | pp_std | tg128 t/s | tg_std | GSM8K | ARC | tg vs Baseline | ARC vs Baseline |
+|-------|-------|----------------|----------:|-------:|----------:|-------:|------:|----:|---------------:|----------------:|
+| **I** | Baseline | *(none)* | 1639.19 | ±61.03 | **44.64** | ±0.03 | 0.0% (0/20) | 35.0% (7/20) | — | — |
+| **II** | Flash Attn | `-fa 1` | 2189.84 | ±94.85 | **48.77** | ±0.14 | 0.0% (0/20) | 35.0% (7/20) | +9.2% ✅ | 0% |
+| **IV** ★ | Q4_K_S + FA | `-fa 1` (Q4_K_S file) | 2204.10 | ±155.15 | **50.15** | ±0.06 | 5.0% (1/20) | 35.0% (7/20) | **+12.3% ✅** | 0% |
+| **V** | Q3_K_M + FA | `-fa 1` (Q3_K_M file) | 2003.81 | ±114.09 | **39.25** | ±0.03 | 5.0% (1/20) | 25.0% (5/20) | **−12.1% ❌** | **−10% ❌** |
 
 **Winner: Step 2 — Q4_K_S + Flash Attention**
 - Generation speed: 50.15 t/s (+12.3% vs baseline)
@@ -488,12 +515,12 @@ All timestamps are UTC-4 (Eastern Daylight Time), 2026-03-29.
 
 ### 6.3 Qwen2.5-0.5B — Full Optimization Ladder
 
-| Step | Label | llama.cpp Flags | pp512 t/s | pp_std | tg128 t/s | tg_std | GSM8K | ARC | tg vs Baseline | ARC vs Baseline |
-|------|-------|----------------|----------:|-------:|----------:|-------:|------:|----:|---------------:|----------------:|
-| 0 | Baseline | *(none)* | 2684.01 | ±328.10 | **80.24** | ±0.36 | 0.0% (0/20) | 40.0% (8/20) | — | — |
-| 1 | Flash Attn | `-fa 1` | 3626.22 | ±711.42 | **89.43** | ±0.42 | 0.0% (0/20) | 40.0% (8/20) | +11.5% ✅ | 0% |
-| 2 | Q4_K_S + FA | `-fa 1` (Q4_K_S file) | 3637.79 | ±723.53 | **90.67** | ±0.33 | 0.0% (0/20) | 40.0% (8/20) | +13.0% ✅ | 0% |
-| 3 | Q3_K_M + FA | `-fa 1` (Q3_K_M file) | 3721.21 | ±290.16 | **93.92** | ±1.10 | 5.0% (1/20) | 40.0% (8/20) | **+17.0% ✅** | 0% |
+| Stage | Label | llama.cpp Flags | pp512 t/s | pp_std | tg128 t/s | tg_std | GSM8K | ARC | tg vs Baseline | ARC vs Baseline |
+|-------|-------|----------------|----------:|-------:|----------:|-------:|------:|----:|---------------:|----------------:|
+| **I** | Baseline | *(none)* | 2684.01 | ±328.10 | **80.24** | ±0.36 | 0.0% (0/20) | 40.0% (8/20) | — | — |
+| **II** | Flash Attn | `-fa 1` | 3626.22 | ±711.42 | **89.43** | ±0.42 | 0.0% (0/20) | 40.0% (8/20) | +11.5% ✅ | 0% |
+| **IV** | Q4_K_S + FA | `-fa 1` (Q4_K_S file) | 3637.79 | ±723.53 | **90.67** | ±0.33 | 0.0% (0/20) | 40.0% (8/20) | +13.0% ✅ | 0% |
+| **V** ★ | Q3_K_M + FA | `-fa 1` (Q3_K_M file) | 3721.21 | ±290.16 | **93.92** | ±1.10 | 5.0% (1/20) | 40.0% (8/20) | **+17.0% ✅** | 0% |
 
 **Winner: Step 3 — Q3_K_M + Flash Attention**
 - Generation speed: 93.92 t/s (+17% vs baseline)
@@ -703,19 +730,105 @@ llama-server \
 
 ---
 
-## 12. What Was Not Tested
+## 12. Future Stages Roadmap — Sorted by Priority
 
-These optimizations were identified but not implemented due to time, tooling, or dependency constraints:
+All optimizations identified but not yet implemented. Sorted by **expected gain ÷ implementation effort** — highest value-to-effort ratio first. Use this table to decide what to run next.
 
-| Optimization | Why Not Tested | Expected Gain |
-|--------------|----------------|---------------|
-| **IQ4_XS quantization for LFM2.5-1.2B** | Requires F16 source; `convert_hf_to_gguf.py` fails on LFM2.5 architecture (`KeyError: 'block_ff_dim'`) | Same speed as Q4_K_S, potentially better accuracy |
-| **IQ4_XS for Llama-3.2-1B** | Llama conversion works but imatrix generation takes ~30 min on Jetson | Marginal accuracy improvement over Q4_K_S |
-| **KV cache quantization at longer contexts** | Only tested at 512-token context; KV effects negligible | Meaningful at 4K–32K token contexts |
-| **ExLlamaV2 runtime** | Different Python framework; requires EXL2 format conversion | 5–15% tg improvement on some configurations |
-| **EAGLE speculative decoding** | Requires training a small draft head on LFM2.5-1.2B hidden states | Potentially 2–3× generation speedup |
-| **Batch size tuning (`-ub`)** | With -ngl 99, ubatch affects only pp (not tg); marginal expected gains | <5% pp improvement |
-| **Llama-3.2-1B with proper chat template** | Would invalidate apple-to-apple comparison with other models using raw 3-shot prompts | Higher GSM8K (est. 20–40%) |
+**Effort scale:** Trivial = flag only, no code change | Easy = download/quantize + benchmark (~1–2 h) | Medium = script change or minor source edit (~2–4 h) | Hard = new framework or major code change (~1 day) | Very Hard = training or architectural rewrite (days+)
+
+**Gain scale:** ★★★★ = both speed and accuracy improve significantly | ★★★ = one metric improves significantly | ★★ = one metric improves marginally | ★ = narrow-case or uncertain gain
+
+---
+
+### Tier 1 — Trivial Effort: Zero Implementation Cost (Flag-Only Changes)
+
+These run immediately with no code changes. Order them by descending expected gain.
+
+| Stage | Optimization | Applies To | llama.cpp Flag(s) | Expected Gain | Effort | Gain |
+|-------|-------------|------------|------------------|---------------|--------|------|
+| **VIII** | **KV-q4_1 + KV-q4_1** — Asymmetric 4-bit KV cache | LFM2.5-1.2B Q4_K_S+FA | `-ctk q4_1 -ctv q4_1` | Neutral speed at 512 tok; better KV accuracy than q4_0 (has zero-point, closer to KIVI-4bit). Real benefit at 4K+ context: meaningful VRAM savings. | Trivial | ★★ |
+| **IX** | **KV-iq4_nl** — Non-linear 4-bit KV (lookup table) | LFM2.5-1.2B Q4_K_S+FA | `-ctk iq4_nl -ctv iq4_nl` | Non-linear quantization uses a lookup table instead of linear scale — better accuracy at same 4-bit budget than q4_0. Speed effect: neutral at 512 tok, beneficial at long context. | Trivial | ★★ |
+| **X** | **KV-q5** — 5-bit KV cache | LFM2.5-1.2B Q4_K_S+FA | `-ctk q5_0 -ctv q5_0` or `-ctk q5_1 -ctv q5_1` | Intermediate between f16 and q4: ~2.5× compression vs f16. Less speed benefit than q4 but lower accuracy degradation. Good for long-context deployments where KV quality matters. | Trivial | ★★ |
+
+**How to run Stages VIII–X:**
+```bash
+# Stage VIII
+python3 bench_gguf.py --model LFM2.5-1.2B-Q4_K_S.gguf --label "LFM_Q4_K_S_FA_ctk-q4_1" --flags "-fa 1 -ctk q4_1 -ctv q4_1"
+
+# Stage IX
+python3 bench_gguf.py --model LFM2.5-1.2B-Q4_K_S.gguf --label "LFM_Q4_K_S_FA_ctk-iq4nl" --flags "-fa 1 -ctk iq4_nl -ctv iq4_nl"
+
+# Stage X
+python3 bench_gguf.py --model LFM2.5-1.2B-Q4_K_S.gguf --label "LFM_Q4_K_S_FA_ctk-q5_0" --flags "-fa 1 -ctk q5_0 -ctv q5_0"
+```
+
+---
+
+### Tier 2 — Easy Effort: High Accuracy Impact
+
+These require downloading a file or a simple script change but have the highest expected accuracy improvement.
+
+| Stage | Optimization | Applies To | Why Not Done Yet | Expected Gain | Effort | Gain |
+|-------|-------------|------------|-----------------|---------------|--------|------|
+| **XI** | **Llama-3.2-1B with proper chat template** — Wrap prompts with Llama 3 instruction format (`<\|begin_of_text\|><\|start_header_id\|>user<\|end_header_id\|>…`) | Llama-3.2-1B Q4_K_S+FA | Would break apple-to-apple with other models; needs separate benchmark run | GSM8K: est. 0% → 20–40% (Llama 3 instruct-tuned for chat, raw prompts don't activate it). ARC unchanged (already works without template). This shows the model's true capability. | Easy (modify bench_gguf.py to add Llama-specific prompt wrapper) | ★★★★ |
+| **XII** | **IQ3_S / IQ3_XS model quantization for Qwen2.5-0.5B** — Importance-weighted 3-bit format | Qwen2.5-0.5B | Not yet tried; must quantize from F16 or download from bartowski | Same or better speed than Q3_K_M; better accuracy because importance matrix preserves critical channels. Q3_K_M uses uniform 3-bit without importance weighting. | Easy (download bartowski IQ3_S GGUF or quantize from F16 + benchmark) | ★★★ |
+| **XIII** | **IQ4_XS for Llama-3.2-1B** — Importance-weighted 4-bit, smaller than Q4_K_M | Llama-3.2-1B | F16 GGUF needed for imatrix generation; imatrix compute ~30 min on Jetson | Same speed as Q4_K_S (similar BPW ~4.3), better accuracy (importance matrix allocates bits to critical channels). Likely ARC 35% → 40–45%. | Easy-Medium (download F16 GGUF or generate imatrix from Q4_K_M → quantize IQ4_XS → benchmark; ~1–2 h total) | ★★★ |
+| **XIV** | **IQ4_XS for LFM2.5-1.2B** — Download pre-built from bartowski or similar | LFM2.5-1.2B | F16 conversion broken (`KeyError: 'block_ff_dim'`); no F16 source available. May exist as pre-built GGUF from community quantizers. | Same speed as Q4_K_S (similar file size), better accuracy. ARC est. 70% → 72–76% if importance matrix is computed from a proper F16 source. | Easy IF pre-built exists on HuggingFace; Hard otherwise (requires fixing converter) | ★★★ |
+
+---
+
+### Tier 3 — Medium Effort: Context-Length and Runtime Experiments
+
+| Stage | Optimization | Applies To | Why Not Done Yet | Expected Gain | Effort | Gain |
+|-------|-------------|------------|-----------------|---------------|--------|------|
+| **XV** | **KV cache quantization at 4K+ context** — Re-run Stage III (q4_0, q4_1, iq4_nl) with 4096-token prompts and 4096-token context window | All models | Only benchmarked at 512 tokens where KV cache is negligible. The real use case for KV quantization is long-context inference. | At 4K context, KV cache is ~8× larger → bandwidth savings from q4_0 become meaningful. Expect +10–20% tg at 4K context vs f16 KV. Requires modifying bench_gguf.py to use `pp4096` test and `--ctx-size 4096`. | Medium (modify benchmark script, rerun KV variants at longer context; ~3–4 h) | ★★★ |
+| **XVI** | **KIVI-2bit via GGML_TYPE_Q2_K whitelist** — Enable 2-bit KV cache by adding one line to llama.cpp source | All models at long context | No 2-bit KV type in standard llama.cpp `kv_cache_types` list. Requires source edit + recompile. | 8× compression vs f16 KV (vs 4× for q4_0). Speed impact at 512 tok: negative (overhead > savings). At 32K+ context: potentially +30–50% tg. High risk of accuracy degradation at 2-bit. | Medium (edit 1 line in `common/arg.cpp`, recompile llama.cpp on Jetson ~25 min, benchmark) | ★★ |
+| **XVII** | **ExLlamaV2 runtime** — Python inference framework with specialized CUDA kernels for quantized models, using EXL2 quantization format | LFM2.5-1.2B, Llama-3.2-1B | Different framework: requires installing exllamav2 Python package (CUDA compile on Jetson), converting models to EXL2 format, writing new benchmark harness | tg speed improvement: est. 5–15% over llama.cpp for 4-bit models. EXL2 format allows per-layer bit allocation calibrated on real data. Also enables row-parallel attention which may help on Jetson. Requires HF weights for conversion (broken for LFM2.5; works for Llama-3.2). | Hard (install + CUDA compile + EXL2 conversion + new benchmark; ~4–8 h) | ★★ |
+
+---
+
+### Tier 4 — Hard Effort: High Gain if Successful
+
+| Stage | Optimization | Applies To | Why Not Done Yet | Expected Gain | Effort | Gain |
+|-------|-------------|------------|-----------------|---------------|--------|------|
+| **XVIII** | **IQ4_XS for LFM2.5-1.2B from fixed F16 source** — Fix `convert_hf_to_gguf.py` for LFM2.5 architecture, generate proper imatrix, quantize to IQ4_XS | LFM2.5-1.2B | `convert_hf_to_gguf.py` fails with `KeyError: 'block_ff_dim'` in `_add_feed_forward_length()`. The LFM2.5 architecture uses non-standard config keys. Fixing the converter requires understanding LFM2.5's config schema. | Best possible accuracy at Q4-class BPW. Proper imatrix from F16 > re-quantizing from Q4_K_M. If ARC improves from 70% → 75–80%, this is meaningful. | Hard (debug and patch `convert_hf_to_gguf.py` for LFM2.5 config, generate F16 GGUF, run llama-imatrix, quantize IQ4_XS, benchmark; ~1 day) | ★★★ |
+| **XIX** | **EAGLE-3 speculative decoding** — Train a small draft head (2-layer transformer) on LFM2.5-1.2B hidden states to predict next tokens without needing a separate model | LFM2.5-1.2B | Requires: (a) GPU for training (not Jetson — needs a workstation); (b) ~1K samples of training data; (c) integrating the trained head into llama.cpp or using the EAGLE inference server. No vocabulary compatibility constraint (head uses same model's embeddings). | 2–3× generation speedup. If tg goes from 53 → 100+ t/s, this is the single highest-impact optimization remaining. Draft token acceptance rate on domain-relevant text: est. 70–80%. | Very Hard (GPU training + custom inference integration; multiple days) | ★★★★ |
+| **XX** | **TensorRT-LLM hardware acceleration** — Build TRT-LLM from `v0.12.0-jetson` branch, convert models to W4A16 AWQ format, benchmark with TRT engine runner | LFM2.5-1.2B, Llama-3.2-1B | Explored conceptually in Stage 5 (Docker pipeline) — estimated results only, engine build deferred. Requires ~40-min source build on Jetson. Different runtime from llama.cpp: serialized CUDA engine, not GGUF. AWQ conversion needs HF weights (accessible for Llama; accessible for LFM2.5 with HF auth). | Stage 5 estimates (from NVIDIA Orin benchmarks): ~99.7 t/s for LFM2.5-1.2B and ~80.5 t/s for Llama-3.2-1B — **~1.8× over current best llama.cpp configs** (53.22 and 50.15 t/s). This is the highest measurable non-training speedup available. | Hard (build TRT-LLM from source `--cuda_architectures=87`, AWQ conversion, TRT engine build, new benchmark harness; ~4–8 h total; full details in [stage5_tensorrt.md](stage5_tensorrt.md)) | ★★★★ |
+
+---
+
+### Tier 5 — Research / Algorithmic Extensions
+
+These require implementing new CUDA kernels or fundamentally changing the inference architecture. Suitable only if all Tiers 1–4 are exhausted.
+
+| Stage | Optimization | Applies To | Description | Expected Gain | Effort | Gain |
+|-------|-------------|------------|-------------|---------------|--------|------|
+| **XXI** | **PolarQuant CUDA kernel in llama.cpp** — Implement polar coordinate KV quantization (8-bit magnitude + 2-bit angular) as a new `-ctk polar` cache type | All models at long context | New GGML type + CUDA encode/decode kernels. Stage 3 showed 7.53× compression ratio but −22% speed in Python. At very long contexts (32K+) the bandwidth savings may overcome kernel overhead. Risk: significant development effort for uncertain Jetson benefit. | 7.53× KV compression. Speed depends on context length — beneficial only at 16K+ tokens. Accuracy: cosine sim 0.915 (Stage 3 measured). | Very Hard (~500–1000 lines new CUDA; ~1 week) | ★★ |
+| **XXII** | **QJL (Johnson-Lindenstrauss) attention kernel** — Replace K-cache with 1-bit JL sketches and modify score computation to use the JL estimator | All models at very long context | Requires rewriting the flash attention kernel to use `(π/2m)·Q_proj·q^T` score estimation. 16–64× KV compression but requires custom attention math. Stage 3 showed Pearson-r=0.62 (moderate correlation) at 16× compression. | 16–64× KV compression. Meaningless at ≤4K context (overhead > savings). At 32K+ could help. Accuracy risk: score estimation error propagates to attention weights. | Extreme (~2000+ lines; attention kernel rewrite; weeks) | ★ |
+
+---
+
+### Priority Summary Table
+
+| Priority | Stage | Optimization | Model(s) | Effort | Expected tg Δ | Expected ARC Δ |
+|----------|-------|-------------|----------|--------|--------------|----------------|
+| 1 | **VIII** | KV q4_1 + q4_1 | LFM2.5 | Trivial | Neutral at 512 tok | Neutral |
+| 2 | **IX** | KV iq4_nl | LFM2.5 | Trivial | Neutral at 512 tok | Neutral |
+| 3 | **X** | KV q5_0 | LFM2.5 | Trivial | Neutral at 512 tok | Neutral |
+| 4 | **XI** | Llama chat template | Llama-3.2-1B | Easy | 0% | GSM8K: 0%→**20–40%** |
+| 5 | **XII** | IQ3_S/IQ3_XS model quant | Qwen2.5-0.5B | Easy | ~0% | ARC: 40%→est. **45–50%** |
+| 6 | **XIII** | IQ4_XS model quant | Llama-3.2-1B | Easy-Med | ~0% | ARC: 35%→est. **40–45%** |
+| 7 | **XIV** | IQ4_XS from community GGUF | LFM2.5-1.2B | Easy (if exists) | ~0% | ARC: 70%→est. **72–76%** |
+| 8 | **XV** | KV quant at 4K context | All | Medium | **+10–20% at 4K** | Neutral |
+| 9 | **XVI** | KIVI-2bit (source edit) | All (long ctx) | Medium | Neg. at 512 tok; +30% at 32K | Risk of degradation |
+| 10 | **XVII** | ExLlamaV2 runtime | LFM2.5, Llama | Hard | **+5–15%** | Neutral |
+| 11 | **XVIII** | IQ4_XS from fixed F16 | LFM2.5-1.2B | Hard | ~0% | ARC: 70%→est. **75–80%** |
+| 12 | **XIX** | EAGLE speculative decoding | LFM2.5-1.2B | Very Hard | **+100–200%** (2–3×) | Neutral |
+| 13 | **XX** | TensorRT-LLM hardware accel | LFM2.5, Llama | Hard | **~1.8× over llama.cpp** (est.) | Neutral |
+| 14 | **XXI** | PolarQuant CUDA kernel | All (32K+ ctx) | Very Hard | +? at very long ctx only | Minor degradation |
+| 15 | **XXII** | QJL attention kernel | All (32K+ ctx) | Extreme | +? at very long ctx only | Moderate degradation |
+
+**Recommendation:** Run Stages VIII–X first (30 minutes total, zero code). Then Stage XI (Llama chat template) for the biggest single accuracy jump. Then Stage XII–XIV for accuracy improvements on the other models. Stage XX (TensorRT-LLM) requires a ~40-min build but offers the largest measurable speedup without training. Stage XIX (EAGLE) has the highest ceiling but requires GPU training outside Jetson.
 
 ---
 
