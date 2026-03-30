@@ -70,8 +70,45 @@ Apple-to-apple: every step changes one variable and measures pp512 t/s, tg128 t/
 - Flash Attention (`-fa 1`) is a free win on all models (+3–12% tg, +12–35% pp)
 - Q4_K_S beats Q4_K_M consistently: smaller model = less memory BW per token
 - Q3_K_M benefits sub-1B models only; harmful for ≥1B (dequant cost > bandwidth savings)
-- KV cache quantization (`-ctk q8_0`) regresses at 512-token context; try at 4K+ context
+- KV cache quantization regresses at 512-token context (all types); crossover at 4K+ context
 - CPU thread count has zero effect at `-ngl 99` — GPU does all compute
+
+### Tier 1 — KV Quantization Type Sweep (Stages VIII–X) ✅ Complete
+
+| Stage | Config | pp512 t/s | tg128 t/s | GSM8K | ARC | Verdict |
+|-------|--------|----------:|----------:|------:|----:|---------|
+| **VIII** | LFM2.5-1.2B Q4_K_S+FA +ctk-**q4_1** | 485 | 40.78 | 5% | **75%** | Speed ❌, ARC +5% (marginal) |
+| **IX** | LFM2.5-1.2B Q4_K_S+FA +ctk-**iq4_nl** | 528 | 35.54 | 5% | 65% | Speed ❌, ARC −5% ❌ |
+| **X** | LFM2.5-1.2B Q4_K_S+FA +ctk-**q5_0** | 537 | 40.23 | 5% | 55% | Speed ❌, ARC −15% ❌ |
+
+All KV quantization types at 512-token context cause 4–5× pp512 regression and ~25% tg regression. KV cache (~4 MB at 512 tok) is too small for compression savings to overcome encode/decode overhead. Real benefit expected at 4K+ context (Stage XV). **Full Tier 1 report:** [outputs/reports/tier1_kv_quant_types.md](outputs/reports/tier1_kv_quant_types.md)
+
+### Tier 2 — Chat Template + IQ Quantization (Stages XI–XIV) ✅ Complete (XIV blocked)
+
+| Stage | Config | pp512 t/s | tg128 t/s | GSM8K | ARC | Verdict |
+|-------|--------|----------:|----------:|------:|----:|---------|
+| **XI** | Llama-3.2-1B Q4_K_S+FA + **chat template** | 2204 | 50.16 | **40%** | **40%** | ✅ GSM8K 5%→**40%** — chat template unlocks instruction following |
+| **XII** | Qwen2.5-0.5B **IQ3_M**+FA | 3501 | 90.96 | 0% | 40% | ❌ Marginally slower than Q3_K_M; no benefit at 0.5B |
+| **XIII** | Llama-3.2-1B **IQ4_XS**+FA | 2386 | **54.37** | 0% | **45%** | ✅ +8.4% tg, +10% ARC — **new Llama winner** |
+| **XIV** | LFM2.5-1.2B IQ4_XS | — | — | — | — | ❌ BLOCKED — no GGUF source available |
+
+**New optimal configs after Tier 2:**
+- **Llama-3.2-1B**: IQ4_XS + FA → **54.37 t/s**, 45% ARC (use chat template for 40% GSM8K)
+- Qwen2.5-0.5B and LFM2.5-1.2B: unchanged
+
+**Full Tier 2 report:** [outputs/reports/tier2_model_quant_and_template.md](outputs/reports/tier2_model_quant_and_template.md)
+
+### Tier 3 — Context-Length and Runtime Experiments (Stages XV–XVII) ✅ Complete (XVII blocked)
+
+| Stage | Config | Result | Verdict |
+|-------|--------|--------|---------|
+| **XV** | All models × f16 + q4_0 KV at **4096-token context** | q4_0 neutral at 4K (−0.2–0.8% pp vs f16); q4_1/q5_0 still −94–95% | ✅ q4_0 production-safe at 4K |
+| **XVI** | KIVI-2bit via Q2_K whitelist + rebuild | Server crashes (ggml_abort) — no CUDA quantize kernel for Q2_K in v8510 | ❌ Not viable |
+| **XVII** | ExLlamaV2 v0.3.2 | pip install OK; import fails — CUDA driver 12060 too old for torch 2.11.0 | ❌ Blocked on JetPack 6.2 |
+
+**Production recommendation from Tier 3:** For any deployment using 4K+ context, add `-ctk q4_0 -ctv q4_0`. Zero speed penalty, ~2× KV VRAM savings, enables 2× longer contexts within the 8 GB UMA budget.
+
+**Full Tier 3 report:** [outputs/reports/tier3_long_context_kv_exllama.md](outputs/reports/tier3_long_context_kv_exllama.md)
 
 Full analysis, all configs, failed methods, and the future roadmap (Stages VIII–XXII):
 **[outputs/reports/edge_optimization_report.md](outputs/reports/edge_optimization_report.md)**

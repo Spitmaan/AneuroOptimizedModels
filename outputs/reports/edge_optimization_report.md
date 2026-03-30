@@ -740,50 +740,61 @@ All optimizations identified but not yet implemented. Sorted by **expected gain 
 
 ---
 
-### Tier 1 — Trivial Effort: Zero Implementation Cost (Flag-Only Changes)
+### Tier 1 — KV Cache Quantization Type Sweep ✅ COMPLETE
 
-These run immediately with no code changes. Order them by descending expected gain.
+**Full report:** [outputs/reports/tier1_kv_quant_types.md](tier1_kv_quant_types.md)
 
-| Stage | Optimization | Applies To | llama.cpp Flag(s) | Expected Gain | Effort | Gain |
-|-------|-------------|------------|------------------|---------------|--------|------|
-| **VIII** | **KV-q4_1 + KV-q4_1** — Asymmetric 4-bit KV cache | LFM2.5-1.2B Q4_K_S+FA | `-ctk q4_1 -ctv q4_1` | Neutral speed at 512 tok; better KV accuracy than q4_0 (has zero-point, closer to KIVI-4bit). Real benefit at 4K+ context: meaningful VRAM savings. | Trivial | ★★ |
-| **IX** | **KV-iq4_nl** — Non-linear 4-bit KV (lookup table) | LFM2.5-1.2B Q4_K_S+FA | `-ctk iq4_nl -ctv iq4_nl` | Non-linear quantization uses a lookup table instead of linear scale — better accuracy at same 4-bit budget than q4_0. Speed effect: neutral at 512 tok, beneficial at long context. | Trivial | ★★ |
-| **X** | **KV-q5** — 5-bit KV cache | LFM2.5-1.2B Q4_K_S+FA | `-ctk q5_0 -ctv q5_0` or `-ctk q5_1 -ctv q5_1` | Intermediate between f16 and q4: ~2.5× compression vs f16. Less speed benefit than q4 but lower accuracy degradation. Good for long-context deployments where KV quality matters. | Trivial | ★★ |
+| Stage | Config | pp512 t/s | tg128 t/s | GSM8K | ARC | Verdict |
+|-------|--------|----------:|----------:|------:|----:|---------|
+| — | **Reference: Q4_K_S+FA (no KV quant)** | **2080** | **53.22** | **5%** | **70%** | **WINNER** |
+| **VIII** | +FA +ctk-**q4_1** | 485 | 40.78 | 5% | **75%** | Speed ❌, ARC +5% marginal |
+| **IX** | +FA +ctk-**iq4_nl** | 528 | 35.54 | 5% | 65% | Speed ❌, ARC −5% ❌ |
+| **X** | +FA +ctk-**q5_0** | 537 | 40.23 | 5% | 55% | Speed ❌, ARC −15% ❌ |
 
-**How to run Stages VIII–X:**
-```bash
-# Stage VIII
-python3 bench_gguf.py --model LFM2.5-1.2B-Q4_K_S.gguf --label "LFM_Q4_K_S_FA_ctk-q4_1" --flags "-fa 1 -ctk q4_1 -ctv q4_1"
-
-# Stage IX
-python3 bench_gguf.py --model LFM2.5-1.2B-Q4_K_S.gguf --label "LFM_Q4_K_S_FA_ctk-iq4nl" --flags "-fa 1 -ctk iq4_nl -ctv iq4_nl"
-
-# Stage X
-python3 bench_gguf.py --model LFM2.5-1.2B-Q4_K_S.gguf --label "LFM_Q4_K_S_FA_ctk-q5_0" --flags "-fa 1 -ctk q5_0 -ctv q5_0"
-```
+**Finding:** All KV quantization types cause 4–5× pp512 regression and 24–33% tg regression at 512-token context. Root cause: KV cache is tiny (~4 MB) at 512 tokens — encode/decode overhead exceeds bandwidth savings. Crossover point is 4K+ context (tested in Stage XV). Only `q4_1` shows a marginal +5% ARC gain; not a deployment win at short context.
 
 ---
 
-### Tier 2 — Easy Effort: High Accuracy Impact
+### Tier 2 — Chat Template + IQ Quantization ✅ COMPLETE (XIV blocked)
 
-These require downloading a file or a simple script change but have the highest expected accuracy improvement.
+**Full report:** [outputs/reports/tier2_model_quant_and_template.md](tier2_model_quant_and_template.md)
 
-| Stage | Optimization | Applies To | Why Not Done Yet | Expected Gain | Effort | Gain |
-|-------|-------------|------------|-----------------|---------------|--------|------|
-| **XI** | **Llama-3.2-1B with proper chat template** — Wrap prompts with Llama 3 instruction format (`<\|begin_of_text\|><\|start_header_id\|>user<\|end_header_id\|>…`) | Llama-3.2-1B Q4_K_S+FA | Would break apple-to-apple with other models; needs separate benchmark run | GSM8K: est. 0% → 20–40% (Llama 3 instruct-tuned for chat, raw prompts don't activate it). ARC unchanged (already works without template). This shows the model's true capability. | Easy (modify bench_gguf.py to add Llama-specific prompt wrapper) | ★★★★ |
-| **XII** | **IQ3_S / IQ3_XS model quantization for Qwen2.5-0.5B** — Importance-weighted 3-bit format | Qwen2.5-0.5B | Not yet tried; must quantize from F16 or download from bartowski | Same or better speed than Q3_K_M; better accuracy because importance matrix preserves critical channels. Q3_K_M uses uniform 3-bit without importance weighting. | Easy (download bartowski IQ3_S GGUF or quantize from F16 + benchmark) | ★★★ |
-| **XIII** | **IQ4_XS for Llama-3.2-1B** — Importance-weighted 4-bit, smaller than Q4_K_M | Llama-3.2-1B | F16 GGUF needed for imatrix generation; imatrix compute ~30 min on Jetson | Same speed as Q4_K_S (similar BPW ~4.3), better accuracy (importance matrix allocates bits to critical channels). Likely ARC 35% → 40–45%. | Easy-Medium (download F16 GGUF or generate imatrix from Q4_K_M → quantize IQ4_XS → benchmark; ~1–2 h total) | ★★★ |
-| **XIV** | **IQ4_XS for LFM2.5-1.2B** — Download pre-built from bartowski or similar | LFM2.5-1.2B | F16 conversion broken (`KeyError: 'block_ff_dim'`); no F16 source available. May exist as pre-built GGUF from community quantizers. | Same speed as Q4_K_S (similar file size), better accuracy. ARC est. 70% → 72–76% if importance matrix is computed from a proper F16 source. | Easy IF pre-built exists on HuggingFace; Hard otherwise (requires fixing converter) | ★★★ |
+| Stage | Config | pp512 t/s | tg128 t/s | GSM8K | ARC | Verdict |
+|-------|--------|----------:|----------:|------:|----:|---------|
+| **XI** | Llama-3.2-1B Q4_K_S+FA + **Llama 3 chat template** | 2204 | 50.16 | **40%** | **40%** | ✅ **GSM8K +35pp (5%→40%)** |
+| **XII** | Qwen2.5-0.5B **IQ3_M**+FA (bartowski, from F16) | 3501 | 90.96 | 0% | 40% | ❌ Slightly slower than Q3_K_M |
+| **XIII** | Llama-3.2-1B **IQ4_XS**+FA (bartowski, from F16) | 2386 | **54.37** | 0% | **45%** | ✅ **+8.4% tg, +10% ARC — NEW WINNER** |
+| **XIV** | LFM2.5-1.2B IQ4_XS | — | — | — | — | ❌ **BLOCKED** — no community GGUF; F16 conversion broken (`KeyError: block_ff_dim`) |
+
+**Key findings:**
+- Chat template unlocks Llama 3's instruction following: GSM8K 5% → **40%** with zero speed cost
+- IQ4_XS beats Q4_K_S for Llama 1B: imatrix calibration from F16 source provides genuine +8% speed and +10% ARC
+- IQ3_M does NOT benefit Qwen 0.5B: model too small for imatrix to find channel importance variation
+- LFM2.5-1.2B IQ4_XS blocked until HF converter is patched or community GGUF appears (Stage XVIII)
 
 ---
 
-### Tier 3 — Medium Effort: Context-Length and Runtime Experiments
+### Tier 3 — Context-Length and Runtime Experiments (Stages XV–XVII) ✅ Complete (XVII blocked)
 
-| Stage | Optimization | Applies To | Why Not Done Yet | Expected Gain | Effort | Gain |
-|-------|-------------|------------|-----------------|---------------|--------|------|
-| **XV** | **KV cache quantization at 4K+ context** — Re-run Stage III (q4_0, q4_1, iq4_nl) with 4096-token prompts and 4096-token context window | All models | Only benchmarked at 512 tokens where KV cache is negligible. The real use case for KV quantization is long-context inference. | At 4K context, KV cache is ~8× larger → bandwidth savings from q4_0 become meaningful. Expect +10–20% tg at 4K context vs f16 KV. Requires modifying bench_gguf.py to use `pp4096` test and `--ctx-size 4096`. | Medium (modify benchmark script, rerun KV variants at longer context; ~3–4 h) | ★★★ |
-| **XVI** | **KIVI-2bit via GGML_TYPE_Q2_K whitelist** — Enable 2-bit KV cache by adding one line to llama.cpp source | All models at long context | No 2-bit KV type in standard llama.cpp `kv_cache_types` list. Requires source edit + recompile. | 8× compression vs f16 KV (vs 4× for q4_0). Speed impact at 512 tok: negative (overhead > savings). At 32K+ context: potentially +30–50% tg. High risk of accuracy degradation at 2-bit. | Medium (edit 1 line in `common/arg.cpp`, recompile llama.cpp on Jetson ~25 min, benchmark) | ★★ |
-| **XVII** | **ExLlamaV2 runtime** — Python inference framework with specialized CUDA kernels for quantized models, using EXL2 quantization format | LFM2.5-1.2B, Llama-3.2-1B | Different framework: requires installing exllamav2 Python package (CUDA compile on Jetson), converting models to EXL2 format, writing new benchmark harness | tg speed improvement: est. 5–15% over llama.cpp for 4-bit models. EXL2 format allows per-layer bit allocation calibrated on real data. Also enables row-parallel attention which may help on Jetson. Requires HF weights for conversion (broken for LFM2.5; works for Llama-3.2). | Hard (install + CUDA compile + EXL2 conversion + new benchmark; ~4–8 h) | ★★ |
+| Stage | Config | Result | Verdict |
+|-------|--------|--------|---------|
+| **XV** | All models × f16 + q4_0 KV at **4096-token context** | q4_0 neutral at 4K (−0.2–0.8% pp vs f16); q4_1 and q5_0 still −94–95% ❌ | ✅ **q4_0 production-safe at 4K** |
+| **XVI** | KIVI-2bit via Q2_K whitelist in arg.cpp + rebuild | Server crash at load (ggml_abort) — no CUDA quantize kernel for Q2_K in v8510 | ❌ Not viable |
+| **XVII** | ExLlamaV2 install + import | pip install v0.3.2 succeeded; import fails — CUDA driver 12060 too old for torch 2.11.0 | ❌ Blocked on JetPack 6.2 |
+
+**Stage XV — 4K Context KV Results:**
+
+| Model | KV type | pp4096 t/s | tg128 t/s | pp Δ vs f16 |
+|-------|---------|----------:|----------:|------------:|
+| LFM2.5-1.2B Q4_K_S+FA | **q4_0** | 2200.68 | 52.89 | **−0.2% ✅** |
+| LFM2.5-1.2B Q4_K_S+FA | q4_1 | 108.27 | 37.64 | −95.1% ❌ |
+| LFM2.5-1.2B Q4_K_S+FA | q5_0 | 122.16 | 37.52 | −94.5% ❌ |
+| Llama-3.2-1B IQ4_XS+FA | **q4_0** | 2433.76 | 53.68 | **−0.8% ✅** |
+| Qwen2.5-0.5B Q3_K_M+FA | **q4_0** | 3897.23 | 92.50 | **−0.7% ✅** |
+
+**Key finding:** q4_0 is the only KV type with a stable CUDA multiply-accumulate kernel path; q4_1 (asymmetric zero-point) and q5_0 (non-power-of-2 packing) use complex fallback paths that remain slow regardless of context length. For long-context deployments, add `-ctk q4_0 -ctv q4_0` — zero penalty at 4K, ~2× KV VRAM savings.
+
+**Full Tier 3 report:** [outputs/reports/tier3_long_context_kv_exllama.md](tier3_long_context_kv_exllama.md)
 
 ---
 
