@@ -170,11 +170,47 @@ cd exllamav2 && pip install -e .
 
 **Root cause:** ExLlamaV2's CUDA kernels are compiled for sm_80 (A100/H100 datacenter GPUs). The Jetson Orin Nano uses sm_87 (Ampere consumer architecture, same generation but different feature set). The kernels use features not compatible with the Jetson's CUDA driver version (CUDA 12.6, JetPack 6.2).
 
-*Note: If ExLlamaV2 gains official Jetson/aarch64 support in a future release, it should be re-tested. Estimated potential: +5–15% tg128 over llama.cpp for 4-bit models.*
-
 **Alternative path investigated:** `llama.cpp` compiled with `--cuda_architectures=87` (the Jetson-specific flag) includes Jetson-optimized kernels. ExLlamaV2 would need the equivalent.
 
 **Verdict: Stage XVII blocked on this hardware. Not viable without ExLlamaV2 aarch64 support.**
+
+---
+
+### Future Return Path — jetson-containers ExLlamaV2 Package
+
+**[dusty-nv/jetson-containers — exllama package](https://github.com/dusty-nv/jetson-containers/tree/master/packages/llm/exllama)**
+
+The `jetson-containers` project (Dustin Franklin / NVIDIA) maintains a curated set of pre-built Docker containers for Jetson hardware, including an `exllama` package. This is the most promising path to getting ExLlamaV2 running on Jetson Orin Nano without manually patching CUDA kernel architectures.
+
+**Why this is likely to work:**
+- `jetson-containers` builds are compiled against JetPack-specific CUDA toolchains with the correct `--gpu-architecture=sm_87` flags
+- The package handles aarch64 pip wheel incompatibilities by building from source in a controlled environment with the right CUDA headers
+- Other llm packages in the same repo (llama.cpp, ollama, mlc) are confirmed working on Orin Nano — the build infrastructure is validated
+
+**To retry Stage XVII using jetson-containers:**
+
+```bash
+# On Jetson, from the jetson-containers repo:
+git clone https://github.com/dusty-nv/jetson-containers
+cd jetson-containers
+
+# Build the exllama container (compiles against JetPack sm_87):
+./build.sh exllama
+
+# Or pull a pre-built image if one is available for JetPack 6.2:
+./run.sh $(./autotag exllama)
+
+# Inside the container, test with an EXL2 model:
+# (EXL2 conversion from GGUF or HF weights handled by exllamav2 convert script)
+python3 -c "import exllamav2; print('ExLlamaV2 import OK')"
+```
+
+**Additional resources:**
+- Community reports of ExLlamaV2 running on Jetson Orin devices exist — worth searching the `jetson-containers` issues and the Orin community forum for confirmed configurations
+- EXL2 conversion requires HF weights (works for Llama-3.2-1B; blocked for LFM2.5 until convert_hf_to_gguf.py is patched in Stage XVIII)
+- Expected potential if working: +5–15% tg128 over llama.cpp for 4-bit models
+
+**Action required:** Pull/build the `jetson-containers` exllama image on Jetson, verify the import, then run the standard llama-bench equivalent (ExLlamaV2 has its own benchmark script).
 
 ---
 

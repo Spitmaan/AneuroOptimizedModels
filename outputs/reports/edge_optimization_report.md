@@ -798,13 +798,17 @@ All optimizations identified but not yet implemented. Sorted by **expected gain 
 
 ---
 
-### Tier 4 — Hard Effort: High Gain if Successful
+### Tier 4 — IQ4_XS, EAGLE-3, TensorRT-LLM (Stages XVIII–XX) 🔄 In Progress (XX pending)
 
-| Stage | Optimization | Applies To | Why Not Done Yet | Expected Gain | Effort | Gain |
-|-------|-------------|------------|-----------------|---------------|--------|------|
-| **XVIII** | **IQ4_XS for LFM2.5-1.2B from fixed F16 source** — Fix `convert_hf_to_gguf.py` for LFM2.5 architecture, generate proper imatrix, quantize to IQ4_XS | LFM2.5-1.2B | `convert_hf_to_gguf.py` fails with `KeyError: 'block_ff_dim'` in `_add_feed_forward_length()`. The LFM2.5 architecture uses non-standard config keys. Fixing the converter requires understanding LFM2.5's config schema. | Best possible accuracy at Q4-class BPW. Proper imatrix from F16 > re-quantizing from Q4_K_M. If ARC improves from 70% → 75–80%, this is meaningful. | Hard (debug and patch `convert_hf_to_gguf.py` for LFM2.5 config, generate F16 GGUF, run llama-imatrix, quantize IQ4_XS, benchmark; ~1 day) | ★★★ |
-| **XIX** | **EAGLE-3 speculative decoding** — Train a small draft head (2-layer transformer) on LFM2.5-1.2B hidden states to predict next tokens without needing a separate model | LFM2.5-1.2B | Requires: (a) GPU for training (not Jetson — needs a workstation); (b) ~1K samples of training data; (c) integrating the trained head into llama.cpp or using the EAGLE inference server. No vocabulary compatibility constraint (head uses same model's embeddings). | 2–3× generation speedup. If tg goes from 53 → 100+ t/s, this is the single highest-impact optimization remaining. Draft token acceptance rate on domain-relevant text: est. 70–80%. | Very Hard (GPU training + custom inference integration; multiple days) | ★★★★ |
-| **XX** | **TensorRT-LLM hardware acceleration** — Build TRT-LLM from `v0.12.0-jetson` branch, convert models to W4A16 AWQ format, benchmark with TRT engine runner | LFM2.5-1.2B, Llama-3.2-1B | Explored conceptually in Stage 5 (Docker pipeline) — estimated results only, engine build deferred. Requires ~40-min source build on Jetson. Different runtime from llama.cpp: serialized CUDA engine, not GGUF. AWQ conversion needs HF weights (accessible for Llama; accessible for LFM2.5 with HF auth). | Stage 5 estimates (from NVIDIA Orin benchmarks): ~99.7 t/s for LFM2.5-1.2B and ~80.5 t/s for Llama-3.2-1B — **~1.8× over current best llama.cpp configs** (53.22 and 50.15 t/s). This is the highest measurable non-training speedup available. | Hard (build TRT-LLM from source `--cuda_architectures=87`, AWQ conversion, TRT engine build, new benchmark harness; ~4–8 h total; full details in [stage5_tensorrt.md](stage5_tensorrt.md)) | ★★★★ |
+| Stage | Title | Status | Key Finding |
+|-------|-------|--------|-------------|
+| **XVIII** | IQ4_XS for LFM2.5 from patched F16 | ✅ Complete | **+10.8% tg128** (58.98 vs 53.22 t/s); ARC −10pp (60% vs 70%) — calibration corpus too narrow (wikitext-2 only). Speed win is real; accuracy recoverable with better imatrix. |
+| **XIX** | EAGLE-3 speculative decoding | ❌ Blocked | Requires external GPU for training. SSM+attention hybrid architecture (10 of 16 layers are SSM) complicates standard EAGLE approach. ~2–3× speedup potential if unblocked. |
+| **XX** | TensorRT-LLM hardware acceleration | 🔄 In progress | Build running in `aneurologic_phase5` Docker (sm_87, v0.12.0-jetson). Estimated ~1.8× speedup over llama.cpp. Results pending. |
+
+**4K context production recommendation (from Tier 3):** Add `-ctk q4_0 -ctv q4_0` to long-context deployments — zero speed penalty, ~2× KV VRAM savings.
+
+**Full Tier 4 report:** [outputs/reports/tier4_iq4xs_eagle_trtllm.md](tier4_iq4xs_eagle_trtllm.md)
 
 ---
 

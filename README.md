@@ -110,6 +110,26 @@ All KV quantization types at 512-token context cause 4–5× pp512 regression an
 
 **Full Tier 3 report:** [outputs/reports/tier3_long_context_kv_exllama.md](outputs/reports/tier3_long_context_kv_exllama.md)
 
+---
+
+### Tier 4 — IQ4_XS, EAGLE-3, TensorRT-LLM (Stages XVIII–XX) 🔄 In Progress (XX pending)
+
+| Stage | Title | Status | Key Finding |
+|-------|-------|--------|-------------|
+| **XVIII** | IQ4_XS for LFM2.5 from patched F16 | ✅ Complete | **+10.8% tg128** (58.98 vs 53.22 t/s); ARC −10pp — calibration corpus too narrow. Speed win real; accuracy recoverable with better imatrix. |
+| **XIX** | EAGLE-3 speculative decoding | ❌ Blocked | Requires external GPU for training. SSM+attention hybrid arch complicates standard EAGLE approach. ~2–3× speedup potential. |
+| **XX** | TensorRT-LLM hardware acceleration | 🔄 In progress | Build running (sm_87, v0.12.0-jetson). Estimated ~1.8× over llama.cpp. Results pending. |
+
+**Updated deployment configs after Tier 4:**
+
+| Model | Best Speed Config | tg128 t/s | Best Accuracy Config | ARC |
+|-------|-----------------|----------:|---------------------|----:|
+| LFM2.5-1.2B | IQ4_XS + FA | **58.98** | Q4_K_S + FA | 70% |
+| Llama-3.2-1B | IQ4_XS + FA | 54.37 | IQ4_XS + FA + chat template | 45% |
+| Qwen2.5-0.5B | Q3_K_M + FA | 93.92 | Q3_K_M + FA | 40% |
+
+**Full Tier 4 report:** [outputs/reports/tier4_iq4xs_eagle_trtllm.md](outputs/reports/tier4_iq4xs_eagle_trtllm.md)
+
 Full analysis, all configs, failed methods, and the future roadmap (Stages VIII–XXII):
 **[outputs/reports/edge_optimization_report.md](outputs/reports/edge_optimization_report.md)**
 
