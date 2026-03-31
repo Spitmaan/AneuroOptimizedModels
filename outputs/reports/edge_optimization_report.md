@@ -804,7 +804,7 @@ All optimizations identified but not yet implemented. Sorted by **expected gain 
 |-------|-------|--------|-------------|
 | **XVIII** | IQ4_XS for LFM2.5 from patched F16 | ✅ Complete | **+10.8% tg128** (58.98 vs 53.22 t/s); ARC −10pp (60% vs 70%) — calibration corpus too narrow (wikitext-2 only). Speed win is real; accuracy recoverable with better imatrix. |
 | **XIX** | EAGLE-3 speculative decoding | ❌ Blocked | Requires external GPU for training. SSM+attention hybrid architecture (10 of 16 layers are SSM) complicates standard EAGLE approach. ~2–3× speedup potential if unblocked. |
-| **XX** | TensorRT-LLM hardware acceleration | 🔄 In progress | Build running in `aneurologic_phase5` Docker (sm_87, v0.12.0-jetson). Estimated ~1.8× speedup over llama.cpp. Results pending. |
+| **XX** | TensorRT-LLM W4A16 | ✅ Partial (Qwen only) | Qwen2.5-0.5B: **+86% pp, +7.4% tg** (100.87 vs 93.92 t/s). LFM2.5 blocked (SSM arch unsupported). Llama blocked (gated HF weights). |
 
 **4K context production recommendation (from Tier 3):** Add `-ctk q4_0 -ctv q4_0` to long-context deployments — zero speed penalty, ~2× KV VRAM savings.
 

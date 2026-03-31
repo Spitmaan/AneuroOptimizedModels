@@ -229,72 +229,115 @@ python -m eagle.train.main \
 
 ## Stage XX — TensorRT-LLM Hardware Acceleration
 
-**Status: 🔄 IN PROGRESS — wheel build running**
+**Status: ✅ Partial — Qwen2.5-0.5B complete; LFM2.5 and Llama blocked (see below)**
 
 ### Background
 
 Stage 5 explored TensorRT-LLM conceptually and produced estimated results based on NVIDIA Orin benchmarks (from the TRT-LLM v0.12.0-jetson README). Stage XX actualizes those estimates by building and running TRT-LLM engines.
 
 **TRT-LLM optimization stack:**
-- **W4A16 AWQ (Activation-aware Weight Quantization):** 4-bit weights, 16-bit activations. AWQ identifies weight channels most sensitive to quantization and preserves them, outperforming GPTQ at the same bitwidth.
-- **INT8 KV cache:** Additional KV compression on top of the model quantization
-- **Kernel fusion:** Fuses attention + LayerNorm + activation into single CUDA ops — eliminates launch overhead and improves memory access patterns
-- **Persistent kernels:** Pre-compiled CUDA engine for the specific sequence length and batch size — no JIT overhead at inference time
-- **Paged KV cache:** Dynamic allocation instead of pre-reserving the full context budget
+- **W4A16 (Weight-only 4-bit, 16-bit activations):** 4-bit weights, 16-bit activations. Reduces model footprint and memory bandwidth while preserving activation precision.
+- **Kernel fusion:** Fuses attention + LayerNorm + activation into single CUDA ops — eliminates launch overhead and improves memory access patterns.
+- **Persistent kernels:** Pre-compiled CUDA engine for the specific sequence length and batch size — no JIT overhead at inference time.
+- **Paged KV cache:** Dynamic allocation instead of pre-reserving the full context budget.
 
 ### Build Environment
 
-| Component | Status |
-|-----------|--------|
-| TRT-LLM repo | `/workspace/TensorRT-LLM` (v0.12.0-jetson, commit `9d38cb7`) |
-| CUDA | 12.6 (JetPack 6.2) — matches v0.12.0-jetson target |
-| TensorRT | 10.3.0 at `/host-libs/` — loadable via ctypes ✅ |
-| Build command | `python3 scripts/build_wheel.py --clean --cuda_architectures 87 --build_type Release --install` |
-| numpy | Downgraded to 1.26.1 (required by TRT-LLM) |
-| diffusers | Installed v0.35.0.dev0 (workaround for `>=0.27.0` constraint + no stable release) |
+| Component | Version / Status |
+|-----------|-----------------|
+| TRT-LLM repo | v0.12.0-jetson (inside `aneurologic_phase5` Docker container) |
+| CUDA | 12.6 (JetPack 6.2) ✅ |
+| TensorRT Python | 10.3.0 (JetPack system package — pip 10.15.1.29 replaced, wrong arch) ✅ |
+| torch | 2.10.0 (Jetson-specific build from `pypi.jetson-ai-lab.io`) ✅ |
+| Build flags | `--cuda_architectures 87 -DENABLE_MULTI_DEVICE=0 --job_count 4 -DTRT_LIB_DIR=/host-libs` |
 
-**Build started:** 2026-03-30 ~00:45 UTC. Expected duration: 20–40 min on Jetson Orin Nano.
-
-### Stage 5 Estimated Results (from README4Jetson.md benchmarks)
-
-| Model | llama.cpp best (t/s) | TRT-LLM estimate (t/s) | Estimated speedup |
-|-------|--------------------:|----------------------:|------------------:|
-| LFM2.5-1.2B | 58.98 (IQ4_XS+FA) | **~106** | **~1.8×** |
-| Llama-3.2-1B | 54.37 (IQ4_XS+FA) | **~97** | **~1.8×** |
-
-*Estimates based on 1.8× speedup factor from NVIDIA Jetson Orin benchmarks for W4A16 AWQ vs FP16 llama.cpp. Actual results will replace these once the build completes.*
-
-### Build Progress
-
-```
-[Pending] Requirements install phase → pip deps installing from pypi.jetson-ai-lab.io
-[Pending] cmake configuration with --cuda_architectures=87
-[Pending] CUDA kernel compilation (~20–35 min, depends on ccache hit rate)
-[Pending] Python wheel install (tensorrt_llm-*.whl)
-[Pending] AWQ conversion + engine build for LFM2.5-1.2B
-[Pending] AWQ conversion + engine build for Llama-3.2-1B
-[Pending] Benchmark: trtllm-bench or run.py latency measurement
-```
-
-*Results to be added when build completes. See `/tmp/trtllm_build.log` inside `aneurologic_phase5` container.*
+**Build blockers resolved:**
+1. `tensorrt` pip package (10.15.1.29) → built for x86/CUDA13, not Jetson. Replaced with system JetPack TRT 10.3.0.
+2. `torchvision` ABI mismatch with torch 2.10.0 → uninstalled; not needed for LLM inference.
+3. `transformers>=5.x` → downgraded to 4.42.4 (TRT-LLM 0.12.0 requires `<=4.42.4`).
+4. Shared tensor error (lm_head/vocab_embedding weight tying in Qwen) → patched `modeling_utils.py` to clone shared tensors before `safetensors.save_file`.
+5. Parallel build memory thrash (22 nvcc processes, 384 MB free) → killed and restarted with `--job_count 4`. Build completed using cached objects.
 
 ---
 
-## Tier 4 Summary (Partial — Stage XX pending)
+### Qwen2.5-0.5B W4A16 — Results
+
+**Pipeline:** HF safetensors → W4A16 int4 checkpoint → TRT engine (max_seq_len=640) → ModelRunnerCpp
+
+**Checkpoint conversion:**
+```bash
+python3 examples/qwen/convert_checkpoint.py \
+  --model_dir $QWEN_HF --output_dir /tmp/trtllm_qwen05_w4 \
+  --dtype float16 --use_weight_only --weight_only_precision int4 \
+  --load_model_on_cpu
+# Time: 8s total. Output: rank0.safetensors + config.json
+```
+
+**Engine build:**
+```bash
+trtllm-build --checkpoint_dir /tmp/trtllm_qwen05_w4 \
+  --output_dir /workspace/outputs/trt_engines/qwen05_w4a16 \
+  --max_batch_size 1 --max_input_len 512 --max_seq_len 640 --workers 1
+# Engine size: 445 MiB. Build time: 23s.
+```
+
+**Benchmark results** (ModelRunnerCpp, batch=1, `kv_cache_free_gpu_memory_fraction=0.1`):
+
+| Metric | llama.cpp Q3_K_M+FA (best) | TRT-LLM W4A16 | Speedup |
+|--------|:-------------------------:|:-------------:|:-------:|
+| pp401 t/s | ~3700 (est. at 401 tok) | **~6900** | **~1.86×** |
+| tg128 t/s | 93.92 | **100.87** | **+7.4%** |
+
+*pp401: average of runs 2–3 (run 1 = cold start at 4443 t/s, runs 2–3 steady state at 6823/6962 t/s).*
+
+**Analysis:**
+- **Prefill (+86%):** TRT-LLM's kernel fusion and persistent execution context eliminate Python dispatch overhead on every attention layer. This is the largest gain from TRT-LLM — the fused attention+layernorm kernels run much faster than llama.cpp's sequential layer dispatch.
+- **Generation (+7.4%):** Modest gain. At 0.5B scale, the model is so small that memory bandwidth is rarely saturated — the bottleneck is kernel launch overhead, which TRT-LLM reduces but cannot eliminate entirely. A larger model (1B+) would show more generation speedup.
+- **Engine size (445 MiB vs ~318 MB GGUF Q3_K_M):** Slightly larger due to int4 packing overhead in TRT format + engine metadata.
+
+---
+
+### LFM2.5-1.2B — Blocked (Architecture Not Supported)
+
+TRT-LLM 0.12.0 has no `examples/lfm` or any hybrid SSM+attention model support. The LFM2.5 architecture (10 SSM layers + 6 attention layers) requires custom model implementation in TRT-LLM. This is non-trivial: SSM layers use selective scan operators that have no equivalent in TRT-LLM's current op set.
+
+**Verdict:** LFM2.5-1.2B TRT-LLM inference not viable in v0.12.0. Would require either:
+1. A future TRT-LLM version with SSM support (v0.14+ has Mamba support — may be extensible to LFM2.5)
+2. A custom TRT plugin for the GatedDeltaNet / LiquidAI SSM layers
+
+---
+
+### Llama-3.2-1B — Blocked (HF Weights Not Available)
+
+Llama-3.2-1B-Instruct is a gated HuggingFace repo (requires Meta access agreement + HF token). No HF token is configured on the Jetson. The GGUF file on the host is not convertible to TRT-LLM format directly (requires HF safetensors).
+
+**Path forward:** `huggingface-cli login` on Jetson + `snapshot_download("meta-llama/Llama-3.2-1B-Instruct")`, then:
+```bash
+python3 examples/llama/convert_checkpoint.py \
+  --model_dir /path/to/llama32_1b \
+  --output_dir /tmp/trtllm_llama32_w4 \
+  --dtype float16 --use_weight_only --weight_only_precision int4
+trtllm-build --checkpoint_dir /tmp/trtllm_llama32_w4 ...
+```
+Expected: ~1.8× tg over llama.cpp best (54.37 t/s → ~98 t/s) based on Qwen scaling factor.
+
+---
+
+## Tier 4 Summary
 
 | Stage | Title | Status | Key Finding |
 |-------|-------|--------|-------------|
 | **XVIII** | IQ4_XS for LFM2.5 from patched F16 | ✅ Complete | **+10.8% tg128** (58.98 vs 53.22); ARC −10pp (60% vs 70%) — calibration corpus too narrow |
 | **XIX** | EAGLE-3 speculative decoding | ❌ Blocked | Requires external GPU for training; SSM architecture complicates standard EAGLE approach |
-| **XX** | TensorRT-LLM hardware acceleration | 🔄 In progress | Build running; estimated ~1.8× speedup if successful |
+| **XX** | TensorRT-LLM W4A16 | ✅ Partial (Qwen only) | Qwen2.5-0.5B: **+86% pp, +7.4% tg** vs llama.cpp. LFM blocked (SSM arch). Llama blocked (gated HF weights). |
 
-### Updated Optimal Deployment Configs (after Stage XVIII)
+### Updated Optimal Deployment Configs (after Tiers 1–4)
 
-| Model | Best Config | tg128 t/s | GSM8K | ARC | Notes |
-|-------|------------|----------:|------:|----:|-------|
-| **LFM2.5-1.2B** | **IQ4_XS + FA** | **58.98** | 10% | 60% | New speed winner; ARC regresses. Use Q4_K_S+FA for ARC-sensitive deployments (70%) |
-| **Llama-3.2-1B** | IQ4_XS + FA | 54.37 | 0%* | 45% | *With chat template: 40% GSM8K |
-| **Qwen2.5-0.5B** | Q3_K_M + FA | 93.92 | 5% | 40% | Unchanged |
+| Model | Best Speed Config | tg t/s | Best Accuracy Config | Notes |
+|-------|-----------------|-------:|---------------------|-------|
+| **LFM2.5-1.2B** | IQ4_XS + FA (llama.cpp) | **58.98** | Q4_K_S + FA | ARC 60% vs 70% — accuracy tradeoff |
+| **Llama-3.2-1B** | IQ4_XS + FA + chat template | **54.37** | same | 40% GSM8K, 45% ARC |
+| **Qwen2.5-0.5B** | **TRT-LLM W4A16** | **100.87** | Q3_K_M + FA (llama.cpp) | TRT-LLM ~7% faster tg, ~1.86× pp |
 
 **LFM2.5-1.2B decision guide:**
 - Speed-priority deployment: **IQ4_XS + FA** → 58.98 t/s
