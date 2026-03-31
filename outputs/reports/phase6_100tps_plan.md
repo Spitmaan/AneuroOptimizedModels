@@ -28,56 +28,38 @@ The 37% efficiency figure is calibrated from Qwen2.5-0.5B (TRT-LLM W4A16, 100.87
 ## Path 1 — Speculative Decoding: Llama-3.2-3B + 1B Draft
 
 **Target:** ~60–80 t/s effective on Llama-3.2-3B (>1B model)
-**Effort:** Low — testable today, no new builds required
-**Hardware needed:** Jetson only
+**Status: ❌ BLOCKED — NvMap IOVM hardware constraint**
 
-### Why this is the best first step
-
-Llama 3.2 has both a **3B** and **1B** model with **identical tokenizer and architecture**. This is the ideal speculative decoding pair — high expected acceptance rate. The `llama-speculative` binary already exists on Jetson.
-
-### Setup
-
-```bash
-# On Jetson host — download Llama-3.2-3B IQ4_XS (bartowski)
-cd /home/spitman/Projects/Aneurologic/modelgarden/jetson-containers/data/models/standardized/
-wget "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-IQ4_XS.gguf"
-```
-
-### Benchmark command
-
-```bash
-# Run speculative decoding: 3B main + 1B draft
-/home/spitman/tools/llama.cpp/build/bin/llama-speculative \
-  -m Llama-3.2-3B-Instruct-IQ4_XS.gguf \
-  -md Llama-3.2-1B-Instruct-IQ4_XS.gguf \
-  -ngl 99 -ngl-draft 99 -fa 1 \
-  -p "$(python3 -c \"print('word ' * 200)\")" \
-  -n 128 --draft 5 -e 2>&1 | grep -E 'eval time|speed|accepted'
-```
-
-For proper bench against `bench_gguf.py` framework:
-
-```bash
-python3 scripts/edge_optimization/bench_gguf.py \
-  --model Llama-3.2-3B-Instruct-IQ4_XS.gguf \
-  --speculative-draft Llama-3.2-1B-Instruct-IQ4_XS.gguf \
-  --draft-tokens 5 \
-  --extra-args "-ngl 99 -ngl-draft 99 -fa 1"
-```
-
-### Expected results
-
-- Llama-3.2-3B standalone (IQ4_XS+FA): ~27–32 t/s
-- With 1B draft (5-token lookahead, ~70% acceptance): **~55–75 t/s effective**
-- Best case (high acceptance): 80+ t/s
-
-### Measure and record
+### Results (2026-03-31)
 
 | Metric | Value |
 |--------|-------|
-| 3B standalone tg128 t/s | TBD |
-| Speculative tg128 t/s (draft=5) | TBD |
-| Accepted tokens % | TBD |
+| 3B IQ4_XS standalone tg128 t/s (FA) | **26.01 t/s** |
+| 3B + 1B speculative | **BLOCKED** |
+
+### Blocker: NvMap IOVM virtual address space exhaustion
+
+Llama-3.2-3B IQ4_XS downloaded (1.70 GiB, 3.21B params) and confirmed working standalone at **26.01 t/s** with `-fa 1 -ngl 99`.
+
+Loading the 3B + 1B models simultaneously in `llama-speculative` fails regardless of draft quantization (tried Q4_K_S, Q3_K_M):
+
+```
+NvMapMemAllocInternalTagged: 1075072515 error 12
+ggml_backend_cuda_buffer_type_alloc_buffer: allocating 651 MiB on device 0: cudaMalloc failed: out of memory
+```
+
+**Root cause:** On Jetson Orin Nano, NvMap IOVM (GPU I/O Virtual Memory address space) is limited to ~2–2.5 GB total. After loading:
+- 3B model weights: ~1.7 GB IOVM
+- 3B KV cache + compute scratch: ~0.3 GB IOVM
+- **Total used: ~2.0 GB** — no room left for 1B draft weights (~0.65 GB needed)
+
+This is NOT a physical memory issue (7.6 GB CUDA total, 5.9 GB free after 3B loads). It is a GPU virtual address space limit in the NvMap/SMMU subsystem. There is no user-space workaround via `cudaMalloc` flags; would require kernel boot parameters to increase NvMap IOVM region size.
+
+**Verified:** 3B alone works ✅. Any 1B variant alongside 3B fails ❌. No Q2_K variant exists for Llama-3.2-3B (bartowski's smallest is IQ3_M at 1.60 GiB — insufficient savings).
+
+### Alternative: TRT-LLM Speculative Decoding (deferred to Path 3)
+
+TRT-LLM builds a single optimized engine for both models with more memory-efficient management. Qwen2.5-0.5B (already at 100 t/s in TRT-LLM) as draft + Qwen2.5-1.5B as main may avoid this constraint since TRT manages memory differently than llama.cpp's per-tensor NvMap allocations.
 
 ---
 
@@ -290,9 +272,9 @@ python3 scripts/gen_imatrix_data.py \
 
 | Priority | Path | Expected result | Blocking? |
 |----------|------|----------------|-----------|
-| **1** | [Path 1] Llama-3.2-3B + 1B speculative | ~60–80 t/s on 3B | Nothing (test today) |
-| **2** | [Path 2] Fix TRT-LLM Llama 1B build | ~65–75 t/s on 1B | Try Option A (quantize lm_head) |
-| **3** | [Path 3] Qwen2.5-1.5B + 0.5B draft | ~65–80 t/s on 1.5B | Download Qwen 1.5B weights |
+| **1** | [Path 1] Llama-3.2-3B + 1B speculative | 26 t/s standalone | ❌ BLOCKED — NvMap IOVM limit (3B+1B > ~2.5 GB GPU VA space) |
+| **2** | [Path 2] Fix TRT-LLM Llama 1B build | ~65–75 t/s on 1B | Try `--quant_lm_head` option |
+| **3** | [Path 3] Qwen2.5-1.5B + 0.5B speculative | ~65–80 t/s on 1.5B | Download Qwen 1.5B weights (TRT-LLM manages memory differently) |
 | **4** | [Path 4] EAGLE-3 on DGX Spark | ~80–130 t/s on 1B | Multi-day training effort |
 
 ---
