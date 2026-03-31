@@ -307,19 +307,39 @@ TRT-LLM 0.12.0 has no `examples/lfm` or any hybrid SSM+attention model support. 
 
 ---
 
-### Llama-3.2-1B — Blocked (HF Weights Not Available)
+### Llama-3.2-1B W4A16 — Results (Partial, No Speedup)
 
-Llama-3.2-1B-Instruct is a gated HuggingFace repo (requires Meta access agreement + HF token). No HF token is configured on the Jetson. The GGUF file on the host is not convertible to TRT-LLM format directly (requires HF safetensors).
+**Status: ⚠️ Completed with significant caveats**
 
-**Path forward:** `huggingface-cli login` on Jetson + `snapshot_download("meta-llama/Llama-3.2-1B-Instruct")`, then:
-```bash
-python3 examples/llama/convert_checkpoint.py \
-  --model_dir /path/to/llama32_1b \
-  --output_dir /tmp/trtllm_llama32_w4 \
-  --dtype float16 --use_weight_only --weight_only_precision int4
-trtllm-build --checkpoint_dir /tmp/trtllm_llama32_w4 ...
-```
-Expected: ~1.8× tg over llama.cpp best (54.37 t/s → ~98 t/s) based on Qwen scaling factor.
+Weights downloaded from `unsloth/Llama-3.2-1B-Instruct` mirror (official `meta-llama` gated repo requires license acceptance — accepted 2026-03-31 but download still in progress; mirror used for conversion).
+
+**Build path required 7 source patches to TRT-LLM 0.12.0:**
+
+1. **`models/llama/config.py`** — Normalize Llama 3.2 rope_scaling format (`rope_type` → `type` key)
+2. **`models/llama/convert.py`** — Skip `lm_head.weight` load when `tie_word_embeddings=True` (Llama 3.2 has no separate `lm_head.weight` in safetensors)
+3. **`layers/linear.py`** — None guard in `postprocess()` when weight is None (tied lm_head case)
+4. **`models/model_weights_loader.py`** — Two patches: None guard in postprocess chain + `KeyError` guard in `check()` for missing `lm_head.weight`
+5. **`models/modeling_utils.py`** — Explicit `lm_head.weight = vocab_embedding.weight.clone()` after dedup, so `from_checkpoint` finds both keys; `share_embedding(model)` call before `save_checkpoint`
+6. **`examples/llama/convert_checkpoint.py`** — Call `share_embedding(llama)` before `save_checkpoint` when `tie_word_embeddings=True`
+7. **`tensorrt_llm/commands/build.py`** — `torch.cuda.empty_cache()` + 256 MB workspace limit to reduce TRT build peak memory
+
+**Critical blocker — TRT engine serialization OOM with `--gemm_plugin float16`:**
+
+The correct W4A16 build requires `--gemm_plugin float16` to keep weights in int4 format at runtime. The TRT 10.3.0 engine serializer (`globWriter.cpp`) starts with a 1 GB GPU allocation for the serialization buffer. On the 8 GB Jetson, after loading the 1.5 GB W4A16 checkpoint + TRT network representation + profiling buffers, the serializer cannot allocate the 1 GB buffer — NvMap IOVM allocation fails even though PyTorch reports 5.4 GB CUDA-free.
+
+**Workaround attempted:** Build without `--gemm_plugin float16`. This succeeds but produces a 1002 MB FP16-path engine where quantized weights are dequantized at build time to float16. The runtime uses FP16 math, not W4A16.
+
+**Benchmark results** (no-gemm_plugin engine, ModelRunnerCpp, batch=1, `kv_cache_free_gpu_memory_fraction=0.1`):
+
+| Metric | llama.cpp baseline Q4_K_M | llama.cpp best IQ4_XS+FA | TRT-LLM W4A16 (no gemm_plugin) |
+|--------|:-------------------------:|:------------------------:|:-------------------------------:|
+| tg128 t/s | 44.64 | **54.37** | 44.08 |
+
+**Result: No improvement.** TRT-LLM without gemm_plugin falls back to FP16 math and matches (but does not exceed) the llama.cpp baseline. The llama.cpp IQ4_XS+FA config (54.37 t/s) remains the Llama-3.2-1B deployment recommendation.
+
+**Root cause of serialization OOM:** TRT 10.3.0 `globWriter.cpp::makeResizableGpuMemory` starts with a hardcoded 1 GB GPU buffer. Qwen 0.5B engine with gemm_plugin is ~446 MB, so TRT can alloc 1 GB successfully after Qwen's smaller checkpoint is loaded. Llama 1B checkpoint is 1.5 GB (3× larger), leaving insufficient headroom for the 1 GB serialization buffer even though total GPU free shows 5.4 GB (PyTorch's memory accounting does not reflect NvMap IOVM pressure from TRT's direct allocations).
+
+**Verdict: Llama-3.2-1B TRT-LLM W4A16 is blocked on Jetson Orin 8 GB.** The gemm_plugin build OOM is a fundamental memory constraint of TRT 10.3.0 on Orin. Not viable without either a TRT version that uses a smaller initial serialization buffer or a Jetson with more RAM.
 
 ---
 
@@ -329,7 +349,7 @@ Expected: ~1.8× tg over llama.cpp best (54.37 t/s → ~98 t/s) based on Qwen sc
 |-------|-------|--------|-------------|
 | **XVIII** | IQ4_XS for LFM2.5 from patched F16 | ✅ Complete | **+10.8% tg128** (58.98 vs 53.22); ARC −10pp (60% vs 70%) — calibration corpus too narrow |
 | **XIX** | EAGLE-3 speculative decoding | ❌ Blocked | Requires external GPU for training; SSM architecture complicates standard EAGLE approach |
-| **XX** | TensorRT-LLM W4A16 | ✅ Partial (Qwen only) | Qwen2.5-0.5B: **+86% pp, +7.4% tg** vs llama.cpp. LFM blocked (SSM arch). Llama blocked (gated HF weights). |
+| **XX** | TensorRT-LLM W4A16 | ✅ Partial (Qwen only) | Qwen2.5-0.5B: **+86% pp, +7.4% tg** vs llama.cpp. LFM blocked (SSM arch). Llama: 44.08 t/s (no improvement — gemm_plugin build OOMs on 8 GB Jetson). |
 
 ### Updated Optimal Deployment Configs (after Tiers 1–4)
 
