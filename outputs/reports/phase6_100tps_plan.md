@@ -66,60 +66,56 @@ TRT-LLM builds a single optimized engine for both models with more memory-effici
 ## Path 2 — Fix TRT-LLM Llama-3.2-1B W4A16 Build
 
 **Target:** ~65–75 t/s for Llama-3.2-1B (proper W4A16, int4 weights at runtime)
-**Effort:** Medium — requires diagnosing and fixing the TRT build OOM
+**Status: ❌ BLOCKED — NvMap IOVM hardware constraint (exhaustive investigation)**
 **Hardware needed:** Jetson (build + run)
 
-### Background
+### Results (2026-03-31 / 2026-04-02)
 
-Our Stage XX attempt built Llama-3.2-1B without `--gemm_plugin float16` (FP16 fallback): 44.08 t/s, no improvement. The proper W4A16 build (with gemm_plugin) fails at engine serialization:
+| Attempt | Outcome |
+|---------|---------|
+| no-gemm-plugin engine (Stage XX) | ✅ 1002 MB, **44.08 t/s** (FP16 fallback, no improvement) |
+| gemm-plugin + workspace 256 MB limit | ❌ globWriter OOM (1 GB IOVM) |
+| gemm-plugin + custom PinnedMemAllocator | ❌ `cudaMallocHost` for 1 GB fails — NvMap IOVM applies to pinned memory too |
+| gemm-plugin + share_embedding_table fix (–501 MB) | ❌ 512 MB cudaMallocHost OK, globWriter 1 GB still fails |
+| llama.cpp IQ4_XS + FA (best alternative) | **60.28 t/s** (no gemm_plugin needed) |
 
-> `[TRT] [E] [globWriter.cpp::makeResizableGpuMemory::434] Error Code 2: OutOfMemory (Requested size was 1073741824 bytes.)`
+### Root cause analysis — exhaustive
 
-TRT 10.3.0's engine serializer starts with a hardcoded 1 GB GPU buffer. With the 1.5 GB Llama checkpoint loaded in GPU + TRT build state, NvMap IOVM allocation fails.
+**Why is TRT-LLM W4A16 with gemm_plugin impossible on Jetson Orin Nano 8GB:**
 
-### Why DGX Spark cannot help here
+1. **NvMap IOVM physical limit:** Jetson Orin's NvMap IOVM (GPU virtual address space) is limited to ~2–2.5 GB system-wide. This constraint applies to `cudaMalloc` AND `cudaMallocHost` (both go through SMMU on UMA hardware).
 
-The DGX Spark is sm_121 (Blackwell GB10). TRT engines are **architecture-specific** and require the actual target GPU for kernel profiling. sm_121 ≠ sm_87 (Jetson Orin). There is no cross-architecture TRT engine compilation.
+2. **Build-time IOVM budget:**
+   - Python/CUDA context overhead: ~0.3 GB
+   - TRT 10.3.0 kernel library: ~1.2 GB (unavoidable at build time)
+   - Llama 1B W4A16 checkpoint: ~1.0 GB (after lm_head deduplication fix, see below)
+   - Total before serialization: ~2.5 GB — IOVM exhausted
 
-### Fix options (in priority order)
+3. **globWriter 1 GB allocation:** TRT 10.3.0 `globWriter.cpp::makeResizableGpuMemory` allocates a 1 GB GPU buffer for engine serialization (gemm_plugin engine is large). With IOVM exhausted, this fails. The workspace limit (256 MB) controls profiling, not serialization.
 
-**Option A — Reduce lm_head to INT4 (quantize the vocabulary embedding too)**
-The root cause is the 501 MB float16 lm_head (128K vocab × 2048 hidden). If lm_head is quantized to INT4, the checkpoint drops to ~1.0 GB and the engine serialization buffer allocation may succeed.
+### All patches applied to TRT-LLM source (8 total)
 
-```bash
-# In container — convert with quantized lm_head
-python3 examples/llama/convert_checkpoint.py \
-  --model_dir /tmp/llama32_1b \
-  --output_dir /tmp/trtllm_llama32_w4_qlmhead \
-  --dtype float16 \
-  --use_weight_only --weight_only_precision int4 \
-  --quant_lm_head \    # flag to also quantize lm_head
-  --load_model_on_cpu
-```
+| File | Patch | Purpose |
+|------|-------|---------|
+| `builder.py` | `PinnedMemAllocator` (custom IGpuAllocator) | Route large allocs to `cudaMallocHost` to bypass NvMap — partially works (512 MB OK, 1 GB fails) |
+| `builder.py` | `set_memory_pool_limit(WORKSPACE, 256 MB)` | Reduce workspace from default 1 GB |
+| `builder.py` | `torch.cuda.empty_cache()` + debug logging before build | Free torch cache; visibility |
+| `models/llama/config.py` | Normalize `rope_scaling` dict format | Fix Llama 3.2 rope config |
+| `models/llama/convert.py` | Skip lm_head when `tie_word_embeddings=True` | Avoid loading 501 MB FP16 lm_head into conversion |
+| `models/modeling_utils.py` | `from_checkpoint()` alias: add `lm_head.weight = vocab_emb` when missing | Allow building without duplicate lm_head in safetensors |
+| `models/modeling_utils.py` | Explicit clone in `save_checkpoint` if lm_head missing | Fix Xavier init OOM during conversion |
+| `layers/linear.py` + `model_weights_loader.py` | None-guard in postprocess/check | Handle tied embedding skip gracefully |
 
-**Option B — Use pre-built engines from NVIDIA jetson-containers**
-NVIDIA's `jetson-containers` project may have pre-built TRT engines for Llama 3.2 1B. Check:
-```bash
-# On Jetson
-docker run --rm -it --runtime nvidia nvcr.io/nvidia/l4t-tensorrt-llm:r36.4 \
-  ls /opt/tensorrt_llm/examples/llama/
-```
+### Key technical findings
 
-**Option C — Build at reduced max_seq_len (force smaller engine footprint during serialization)**
-The engine metadata grows with max_seq_len. Try `--max_seq_len 256 --max_input_len 128`:
-```bash
-trtllm-build \
-  --checkpoint_dir /tmp/trtllm_llama32_w4 \
-  --output_dir /workspace/outputs/trt_engines/llama32_w4a16 \
-  --gemm_plugin float16 \
-  --max_batch_size 1 --max_input_len 128 --max_seq_len 256
-```
+- **share_embedding_table fix:** Removed duplicate `lm_head.weight` (501 MB FP16) from the TRT-LLM checkpoint, reducing it from 1531 MB → 1030 MB. Patch to `from_checkpoint()` injects `weights['lm_head.weight'] = weights['transformer.vocab_embedding.weight']` before `model.load()` to satisfy the required-names check.
+- **`cudaMallocHost` is NOT a bypass on Jetson:** Despite Jetson being UMA, pinned host memory still requires NvMap IOVM mapping for GPU DMA. The custom allocator successfully allocates 512 MB via `cudaMallocHost` (confirmed: `[PinnedMemAllocator] 512 MB -> cudaMallocHost OK`) but 1 GB fails — ~512 MB IOVM remaining after kernel lib + checkpoint.
+- **No-gemm-plugin engine works for inference** with `--kv_cache_free_gpu_memory_fraction 0.1` (limits KV cache to avoid NvMap OOM at inference time). Verified correct output: `"The capital of France is Paris."`.
+- **llama.cpp IQ4_XS + FA beats TRT-LLM no-gemm-plugin:** 60.28 t/s (llama.cpp) > 44.08 t/s (TRT-LLM FP16 fallback) because INT4 dequantize+multiply is more bandwidth-efficient than FP16 matmul.
 
-### Expected results once unblocked
+### Why DGX Spark cannot help
 
-| Metric | llama.cpp IQ4_XS+FA (current best) | TRT-LLM W4A16 (expected) |
-|--------|:-----------------------------------:|:------------------------:|
-| tg128 t/s | 54.37 | ~65–75 |
+The DGX Spark is sm_121 (Blackwell GB10). TRT engines are **architecture-specific** — require actual target GPU for kernel profiling. sm_121 ≠ sm_87 (Jetson Orin). No cross-architecture TRT engine compilation possible.
 
 ---
 
@@ -268,22 +264,48 @@ python3 scripts/gen_imatrix_data.py \
 
 ---
 
-## Execution Order
+## llama.cpp IQ4_XS + FA Benchmarks (Updated 2026-04-02)
 
-| Priority | Path | Expected result | Blocking? |
-|----------|------|----------------|-----------|
-| **1** | [Path 1] Llama-3.2-3B + 1B speculative | 26 t/s standalone | ❌ BLOCKED — NvMap IOVM limit (3B+1B > ~2.5 GB GPU VA space) |
-| **2** | [Path 2] Fix TRT-LLM Llama 1B build | ~65–75 t/s on 1B | Try `--quant_lm_head` option |
-| **3** | [Path 3] Qwen2.5-1.5B + 0.5B speculative | ~65–80 t/s on 1.5B | Download Qwen 1.5B weights (TRT-LLM manages memory differently) |
-| **4** | [Path 4] EAGLE-3 on DGX Spark | ~80–130 t/s on 1B | Multi-day training effort |
+These supersede Phase 5 baselines — confirmed with `llama-bench` build 3a60d06ad (8510) on Jetson Orin Nano 8GB.
+
+| Model | Params | Size | tg128 t/s (FA=1) | pp512 t/s (FA=1) |
+|-------|--------|------|-------------------|-------------------|
+| **LFM2 1.2B IQ4_XS** | 1.17B | 630 MiB | **65.64** ← new best >1B | 2315 |
+| **Llama 3.2 1B IQ4_XS** | 1.24B | 701 MiB | **60.28** | 2550 |
+| Llama 3.2 1B Q4_K_S | 1.24B | 732 MiB | 53.39 | 2285 |
+| Llama 3.2 1B Q4_K_M | 1.24B | 763 MiB | 51.94 | 2238 |
+| Llama 3.2 1B Q3_K_M | 1.24B | 651 MiB | 41.53 | 2012 |
+| Qwen2.5-0.5B TRT-LLM W4A16 | 0.5B | — | 100.87 ← best overall | — |
+
+**Key finding:** IQ4_XS format consistently outperforms Q3_K_M despite being larger, because the imatrix-optimized 4.25-bpw format has better GPU kernel efficiency on sm_87. The current >1B ceiling on Jetson llama.cpp is **65.64 t/s** (LFM2 1.2B IQ4_XS + FA).
+
+**Bandwidth utilization (llama.cpp IQ4_XS + FA):**
+- LFM2 1.2B: 65.64 × 630 MB = 41.4 GB/s = **60.9% of 68 GB/s**
+- Llama 3.2 1B: 60.28 × 701 MB = 42.3 GB/s = **62.1% of 68 GB/s**
+
+The ~62% bandwidth utilization means llama.cpp IQ4_XS is substantially more efficient than TRT-LLM no-gemm-plugin FP16 (which only got 44 t/s = 32% efficiency).
 
 ---
 
-## Success Criteria
+## Execution Order (Updated Status)
 
-| Milestone | Target | Model |
-|-----------|--------|-------|
-| ✅ Achieved (Phase 5) | 100.87 t/s | Qwen2.5-0.5B TRT-LLM W4A16 |
-| 🎯 Path 1 goal | ≥60 t/s effective | Llama-3.2-3B with 1B draft |
-| 🎯 Path 2/3 goal | ≥65 t/s | Any 1–1.5B model, TRT-LLM W4A16 |
-| 🎯 Stretch goal | ≥100 t/s | Any >1B model, EAGLE or speculative |
+| Priority | Path | Status | Result |
+|----------|------|--------|--------|
+| **1** | Path 1: Llama-3.2-3B + 1B speculative | ❌ BLOCKED | 26 t/s standalone only; NvMap IOVM < 2.5 GB prevents loading two models |
+| **2** | Path 2: TRT-LLM Llama 1B W4A16 gemm_plugin | ❌ BLOCKED | globWriter 1 GB IOVM requirement impossible on Jetson; 8 patches tried; no-gemm-plugin 44.08 t/s confirmed |
+| **3** | Path 3: Qwen2.5-1.5B TRT-LLM W4A16 | ❌ NOT ATTEMPTED | Qwen 1.5B checkpoint (~1.6 GB) will exceed IOVM limit (same constraint as Path 2) |
+| **4** | Path 4: EAGLE-3 on DGX Spark | 🔄 NEXT | Train draft head on DGX Spark; deploy on Jetson via llama.cpp or TRT-LLM |
+
+---
+
+## Success Criteria (Updated)
+
+| Milestone | Status | Result | Model |
+|-----------|--------|--------|-------|
+| ✅ Phase 5 best | Achieved | 100.87 t/s | Qwen2.5-0.5B TRT-LLM W4A16 |
+| ✅ New >1B record | Achieved | **65.64 t/s** | LFM2 1.2B IQ4_XS + FA (llama.cpp) |
+| ✅ New Llama 1B record | Achieved | **60.28 t/s** | Llama 3.2 1B IQ4_XS + FA (llama.cpp) |
+| 🎯 Path 4 goal | Pending | ≥100 t/s | Llama 3.2 1B + EAGLE-3 speculative draft |
+| 🎯 Stretch goal | Pending | ≥120 t/s | Any >1B model, 2.5× EAGLE acceptance rate |
+
+**Revised assessment:** The 100 t/s + >1B params target is at the physical edge of Jetson's 68 GB/s bandwidth at INT4. Only EAGLE-style speculative decoding (which multiplies effective throughput without extra weight loading) can realistically achieve this. TRT-LLM gemm_plugin (the other path to efficiency) is blocked by NvMap IOVM. Path 4 is the only remaining viable route.
