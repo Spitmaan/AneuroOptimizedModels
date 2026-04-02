@@ -373,8 +373,8 @@ All five blocked paths used one of two frameworks:
 ## Path 6 — MLC-LLM Baseline (Fastest Path to Data)
 
 **Target:** Beat llama.cpp 60.88 t/s baseline with TVM-compiled kernels; confirm if MLC alone can approach 100 t/s  
-**Status: 🔄 NEXT — container pull in progress**  
-**Expected: 70–90 t/s standalone** (TVM kernel fusion typically +20–40% over llama.cpp generic CUDA)
+**Status: ✅ COMPLETE — 65.31 t/s (trials: 64.17 / 66.05 / 65.70 t/s)**  
+**Result: +7.3% vs 60.88 t/s llama.cpp baseline** — improvement is real but modest; bandwidth-bound at 1B scale
 
 MLC-LLM uses Apache TVM to compile models to device-specific fused CUDA kernels, eliminating the kernel launch overhead that costs llama.cpp ~15–20% throughput. Pre-built container is available immediately — no build step.
 
@@ -944,8 +944,8 @@ LiquidAI may release LFM3 variants in larger sizes (3B, 7B) after 2026. If avail
 | **3** | Path 3: Qwen2.5-1.5B TRT-LLM W4A16 | ❌ SKIPPED | Same IOVM constraint as Path 2 |
 | **4** | Path 4: EAGLE-3 via llama.cpp | ❌ BLOCKED | llama.cpp has no EAGLE support |
 | **5** | Path 5: Lookup decoding (llama-lookup) | ❌ BLOCKED | 26% acceptance; CPU-GPU sync overhead = 42% slower than baseline |
-| **6** | **Path 6: MLC-LLM Llama-3.2-1B (fast baseline)** | 🔄 **NEXT** | Pre-built container; TVM kernels; pull in progress |
-| **7** | **Path 7: TRT Edge-LLM Llama-3.2-1B (jetson-containers build)** | 🔒 After Path 6 | Build container on Jetson; export + C++ engine; EAGLE-3 in 7B |
+| **6** | **Path 6: MLC-LLM Llama-3.2-1B** | ✅ **65.31 t/s** | +7.3% vs baseline; modest improvement (bandwidth-bound); confirms TVM kernels work |
+| **7** | **Path 7: TRT Edge-LLM Llama-3.2-1B (jetson-containers build)** | 🔄 **NEXT** | Build container on Jetson; export + C++ engine; EAGLE-3 in 7B |
 | **7B** | **Path 7B: TRT Edge-LLM Llama-3.2-1B + EAGLE-3** | 🔒 After Path 7 | Primary 100 t/s route; 1B + EAGLE-3 = 120–180 t/s |
 | **8** | **Path 8: TRT Edge-LLM Llama-3.1-8B + Llama-3.2-3B** | 🔒 After Path 7B | 8B needs DGX Spark for AWQ; 3B runs on Jetson; 3B borderline 100 t/s |
 | **9** | **Path 9: TRT Edge-LLM Qwen2.5-7B / 3B / 1.5B** | 🔒 After Path 8 | Qwen2.5-1.5B strong 100 t/s candidate; 7B sets large-model record |
