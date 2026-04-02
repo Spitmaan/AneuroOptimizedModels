@@ -474,36 +474,66 @@ Compare result against **60.88 t/s llama.cpp IQ4_XS+FA baseline**.
 ## Path 7 — TRT Edge-LLM via jetson-containers (EAGLE-3 Primary Path)
 
 **Target:** Verify TRT Edge-LLM pipeline works end-to-end on Jetson JetPack 6.2; foundation for EAGLE-3  
-**Status: 🔒 Start after Path 6 data collected**  
+**Status: 🔄 IN PROGRESS — C++ build ✅ done; export pipeline established on DGX Spark**  
 **Expected standalone: 55–75 t/s** (baseline before EAGLE-3 multiplier)
 
-### Step 1: Build tensorrt_edgellm container on Jetson
+### Key discoveries (2026-04-02)
 
-No pre-built container exists for JetPack 6.2. The jetson-containers `tensorrt_edgellm:0.5.0` package (`requires: '>=36'`) builds both the Python export tools and C++ runtime directly on Jetson.
+1. **C++ build succeeded on Jetson host** (v0.5.0) after fixing two cmake issues:
+   - Shell variable expansion bug: `${CUDA_TARGET}` was expanding on LOCAL machine → passed as empty string `/include`. Fixed by using single-quoted SSH commands.
+   - CUDA architecture: CMakeLists.txt default adds sm_100/sm_120 when `AARCH64_BUILD` is not defined and `CUDA_VERSION >= 12.8`. Fixed by `-DCMAKE_CUDA_ARCHITECTURES=87`. The `-DAARCH64_BUILD=1` flag was in `if(NOT DEFINED AARCH64_BUILD)` guard which CMake sees as "used" but reports as "not used" — still works.
+   - **Result:** `llm_build` (278 KB) and `llm_inference` (5.3 MB) at `/home/spitman/tools/TensorRT-Edge-LLM/build/examples/llm/`
 
-**Build time estimate: 45–90 minutes** (clones repo, pip install, cmake + make -j6)
+2. **Python export on DGX Spark (ARM64) works** despite official x86 requirement:
+   - torch 2.9.1+cu128 installs and runs (with CUDA capability 12.1 warning — operations work)
+   - nvidia-modelopt 0.39.0 installs with ARM64 wheels
+   - CUDA OOM on initial load fixed with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+   - INT4 AWQ quantization runs successfully: calibration ~6 s/sample, search ~40-65 s/sample
+
+3. **Pivot to Qwen3-1.7B + EAGLE3** (see Path 7C below):
+   - No EAGLE3 draft models available for Llama-3.2-1B or Llama-3.2-3B
+   - TRT Edge-LLM docs explicitly support: `Qwen3-1.7B` + `AngelSlim/Qwen3-1.7B_eagle3`
+   - Both models downloaded on DGX Spark: `~/qwen3-1.7b/` and `~/qwen3-1.7b-eagle3/`
+
+### Step 1: Build TRT Edge-LLM C++ runtime on Jetson host (not container)
+
+**Approach correction (2026-04-02):** 
+- jetson-containers `tensorrt_edgellm:0.5.0` requires torch 2.9.1 + modelopt 0.39.0 but max available for JetPack 6.2 is torch 2.7 → container build blocked
+- `aneurologic_phase5` container has torch 2.5.0 + no NvOnnxParser.h in container → also blocked
+- **Solution:** Build C++ runtime directly on Jetson HOST (which has NvOnnxParser.h, TRT 10.3.0, CUDA 12.6 headers)
 
 ```bash
-ssh spitman@spitman-jetson
-cd /home/spitman/Projects/Aneurologic/modelgarden/jetson-containers
-
-# Pre-flight: MAXN SUPER mode (do this before any long compute task)
-sudo nvpmodel -m 0 && sudo jetson_clocks
-
-# Build the container (runs install.sh + build.sh inside Docker)
-./build.sh tensorrt_edgellm:0.5.0
+# ✅ ALREADY DONE — binaries at /home/spitman/tools/TensorRT-Edge-LLM/build/examples/llm/
+# Record of working cmake command (IMPORTANT: use single-quoted SSH to prevent local var expansion):
+ssh spitman@spitman-jetson '
+cd /home/spitman/tools/TensorRT-Edge-LLM/build
+cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DTRT_PACKAGE_DIR=/usr \
+    -DONNX_PARSER_INCLUDE_DIR=/usr/include/aarch64-linux-gnu \
+    -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+    -DCUDA_RUNTIME_API_INCLUDE_DIR=/usr/local/cuda-12.6/targets/aarch64-linux/include \
+    -DCURAND_KERNEL_INCLUDE_DIR=/usr/local/cuda-12.6/targets/aarch64-linux/include \
+    -DCUDART_LIB=/usr/local/cuda-12.6/targets/aarch64-linux/lib/libcudart.so \
+    -DAARCH64_BUILD=1 \
+    -DCMAKE_CUDA_ARCHITECTURES=87
+make -j4
+'
+# Binaries at: examples/llm/llm_build (278 KB), examples/llm/llm_inference (5.3 MB)
 ```
 
-Monitor progress:
+**✅ SOLVED: Python export pipeline on DGX Spark.** Environment setup:
 ```bash
-docker logs -f $(docker ps -q --filter ancestor=jetson-containers-build) 2>/dev/null
-```
-
-After build, the container should be named `tensorrt_edgellm:0.5.0`. Verify:
-```bash
-docker run --rm --runtime nvidia tensorrt_edgellm:0.5.0 \
-    python3 /home/spitman/Projects/Aneurologic/modelgarden/jetson-containers/packages/llm/tensorrt_edgellm/test.py
-# Expected: "tensorrt_edgellm version: 0.5.0", "llm_build --help: OK"
+# On DGX Spark (spitmann@spark-807e.local)
+python3 -m venv ~/venvs/trt_edgellm_export
+source ~/venvs/trt_edgellm_export/bin/activate
+pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+pip install nvidia-modelopt[torch]==0.39.0
+cd ~/TensorRT-Edge-LLM && pip install ".[torch,onnx]" --no-deps
+pip install transformers==4.57.3 onnx==1.19.0 datasets==4.4.2
+pip install onnx-graphsurgeon onnxruntime pillow
+# Note: torch has CUDA capability warning for GB10 sm_12.1 but operations work fine
+# CRITICAL: use PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for GPU quant
 ```
 
 ### Step 2: Export Llama-3.2-1B INT4 inside container on Jetson
@@ -598,9 +628,8 @@ Compare wall-clock t/s vs **60.88 t/s llama.cpp IQ4_XS+FA baseline**.
 ## Path 7B — TRT Edge-LLM + EAGLE-3 Speculative Decoding (Primary 100 t/s Path)
 
 **Target:** ≥100 t/s with Llama-3.2-1B via EAGLE-3 draft head  
-**Status: 🔒 BLOCKED on Path 7 baseline success**  
-**Expected: 120–180 t/s** (EAGLE-3 2–3× multiplier on ~60 t/s base)  
-**IOVM budget:** ~1.1 GB (base 700 MB + EAGLE head 200 MB + runtime 200 MB) — fits
+**Status: ⚠️ BLOCKED — No EAGLE3 draft model available for Llama-3.2-1B (searched HuggingFace 2026-04-02)**  
+**Alternative: See Path 7C below (Qwen3-1.7B with EAGLE3 — explicitly supported)**
 
 ### Why EAGLE-3 works on Jetson where standard speculative decoding doesn't
 
@@ -685,6 +714,110 @@ docker run --rm --runtime nvidia \
 EAGLE-3 effective throughput = base × (1 + acceptance × draft_len)  
 Conservative (50% acceptance, 3 drafts): 65 × 2.5 / 1.2 ≈ **135 t/s**  
 With 70% acceptance, 5 drafts: 65 × 4.5 / 1.2 ≈ **244 t/s** (theoretical max)
+
+---
+
+## Path 7C — TRT Edge-LLM: Qwen3-1.7B + EAGLE3 (Primary 100 t/s Route)
+
+**Target:** ≥100 t/s with Qwen3-1.7B (>1B) via EAGLE3 speculative decoding  
+**Status: 🔄 IN PROGRESS — quantization running on DGX Spark**  
+**EAGLE3 draft:** `AngelSlim/Qwen3-1.7B_eagle3` (explicitly supported in TRT Edge-LLM v0.6.0 docs)  
+**Models downloaded:** `~/qwen3-1.7b/` (base) and `~/qwen3-1.7b-eagle3/` (draft) on DGX Spark
+
+### Why Qwen3-1.7B over Llama-3.2-1B
+
+- No EAGLE3 draft model available for Llama-3.2-{1B,3B} on HuggingFace
+- Qwen3-1.7B + AngelSlim/Qwen3-1.7B_eagle3 is the first explicitly supported sub-2B EAGLE3 pair
+- 1.7B > 1B → satisfies >1B parameter constraint
+
+### Step 1: Quantize Qwen3-1.7B (DGX Spark)
+
+```bash
+# On DGX Spark
+source ~/venvs/trt_edgellm_export/bin/activate
+mkdir -p ~/tensorrt-edgellm-workspace/Qwen3-1.7B
+
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+tensorrt-edgellm-quantize-llm \
+    --model_dir ~/qwen3-1.7b \
+    --output_dir ~/tensorrt-edgellm-workspace/Qwen3-1.7B/quantized \
+    --quantization int4_awq \
+    --device cuda
+```
+
+### Step 2: Export base model with EAGLE3 flag (DGX Spark)
+
+```bash
+tensorrt-edgellm-export-llm \
+    --model_dir ~/tensorrt-edgellm-workspace/Qwen3-1.7B/quantized \
+    --output_dir ~/tensorrt-edgellm-workspace/Qwen3-1.7B/onnx/base \
+    --is_eagle_base
+```
+
+### Step 3: Export EAGLE3 draft model (DGX Spark)
+
+```bash
+tensorrt-edgellm-export-draft \
+    --draft_model_dir ~/qwen3-1.7b-eagle3 \
+    --base_model_dir ~/tensorrt-edgellm-workspace/Qwen3-1.7B/quantized \
+    --output_dir ~/tensorrt-edgellm-workspace/Qwen3-1.7B/onnx/draft
+```
+
+### Step 4: Transfer ONNX to Jetson
+
+```bash
+scp -r ~/tensorrt-edgellm-workspace/Qwen3-1.7B/onnx \
+    spitman@spitman-jetson:~/tensorrt-edgellm-workspace/Qwen3-1.7B/
+```
+
+### Step 5: Build engines on Jetson (host, no container needed)
+
+```bash
+TRT_EDGELLM=/home/spitman/tools/TensorRT-Edge-LLM/build/examples/llm
+WORKSPACE=~/tensorrt-edgellm-workspace/Qwen3-1.7B
+
+# Build base model EAGLE engine
+$TRT_EDGELLM/llm_build \
+  --onnxDir $WORKSPACE/onnx/base \
+  --engineDir $WORKSPACE/engines \
+  --maxBatchSize 1 \
+  --maxInputLen 1024 \
+  --maxKVCacheCapacity 4096 \
+  --maxVerifyTreeSize 60 \
+  --maxDraftTreeSize 60 \
+  --eagleBase
+
+# Build draft model engine
+$TRT_EDGELLM/llm_build \
+  --onnxDir $WORKSPACE/onnx/draft \
+  --engineDir $WORKSPACE/engines \
+  --maxBatchSize 1 \
+  --maxInputLen 1024 \
+  --maxKVCacheCapacity 4096 \
+  --maxVerifyTreeSize 60 \
+  --maxDraftTreeSize 60 \
+  --eagleDraft
+```
+
+### Step 6: Benchmark with EAGLE3 (Jetson)
+
+```bash
+$TRT_EDGELLM/llm_inference \
+  --engineDir $WORKSPACE/engines \
+  --inputFile ~/tensorrt-edgellm-workspace/bench_input.json \
+  --outputFile /tmp/qwen3_eagle3_output.json \
+  --warmup 3 \
+  --dumpProfile \
+  --eagle
+```
+
+### Expected results
+
+| Config | Expected t/s | Notes |
+|--------|:------------:|-------|
+| Qwen3-1.7B INT4 standalone | 35–45 t/s | ~1.7B × INT4 bandwidth-bound |
+| Qwen3-1.7B + EAGLE3 (60% accept, 6 drafts) | **80–120 t/s** | EAGLE3 2.5× multiplier |
+| Qwen3-1.7B + EAGLE3 (70% accept) | **100–140 t/s** | Primary 100 t/s target ✅ |
 
 ---
 
@@ -945,8 +1078,9 @@ LiquidAI may release LFM3 variants in larger sizes (3B, 7B) after 2026. If avail
 | **4** | Path 4: EAGLE-3 via llama.cpp | ❌ BLOCKED | llama.cpp has no EAGLE support |
 | **5** | Path 5: Lookup decoding (llama-lookup) | ❌ BLOCKED | 26% acceptance; CPU-GPU sync overhead = 42% slower than baseline |
 | **6** | **Path 6: MLC-LLM Llama-3.2-1B** | ✅ **65.31 t/s** | +7.3% vs baseline; modest improvement (bandwidth-bound); confirms TVM kernels work |
-| **7** | **Path 7: TRT Edge-LLM Llama-3.2-1B (jetson-containers build)** | 🔄 **NEXT** | Build container on Jetson; export + C++ engine; EAGLE-3 in 7B |
-| **7B** | **Path 7B: TRT Edge-LLM Llama-3.2-1B + EAGLE-3** | 🔒 After Path 7 | Primary 100 t/s route; 1B + EAGLE-3 = 120–180 t/s |
+| **7** | **Path 7: TRT Edge-LLM C++ build + DGX Spark export pipeline** | ✅ **C++ done, export running** | `llm_build`+`llm_inference` built on Jetson; venv on DGX Spark works |
+| **7B** | **Path 7B: TRT Edge-LLM Llama-3.2-1B + EAGLE-3** | ⚠️ BLOCKED | No EAGLE3 draft for Llama-3.2-1B on HuggingFace |
+| **7C** | **Path 7C: TRT Edge-LLM Qwen3-1.7B + EAGLE3** | 🔄 **IN PROGRESS** | Quantizing on DGX Spark; EAGLE3 draft available (AngelSlim) |
 | **8** | **Path 8: TRT Edge-LLM Llama-3.1-8B + Llama-3.2-3B** | 🔒 After Path 7B | 8B needs DGX Spark for AWQ; 3B runs on Jetson; 3B borderline 100 t/s |
 | **9** | **Path 9: TRT Edge-LLM Qwen2.5-7B / 3B / 1.5B** | 🔒 After Path 8 | Qwen2.5-1.5B strong 100 t/s candidate; 7B sets large-model record |
 | **10** | **Path 10: TRT Edge-LLM LFM2.5-1.2B** | 🔒 After Path 9 | Architecture support uncertain; highest upside if it works |
