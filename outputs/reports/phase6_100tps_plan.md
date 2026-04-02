@@ -325,25 +325,307 @@ On a discrete GPU, this sync overhead is negligible (~1 ms). On Jetson UMA, per-
 
 ---
 
-## Execution Order (Final Status — Phase 6 Complete)
+---
 
-| Priority | Path | Status | Result |
-|----------|------|--------|--------|
-| **1** | Path 1: Llama-3.2-3B + 1B speculative | ❌ BLOCKED | 26 t/s standalone only; NvMap IOVM < 2.5 GB prevents loading two models |
-| **2** | Path 2: TRT-LLM Llama 1B W4A16 gemm_plugin | ❌ BLOCKED | globWriter 1 GB IOVM requirement impossible on Jetson; 8 patches tried; no-gemm-plugin 44.08 t/s confirmed |
-| **3** | Path 3: Qwen2.5-1.5B TRT-LLM W4A16 | ❌ NOT ATTEMPTED | Qwen 1.5B checkpoint (~1.6 GB) will exceed IOVM limit (same constraint as Path 2) |
-| **4** | Path 4: EAGLE-3 on DGX Spark | ❌ BLOCKED | llama.cpp has no EAGLE support (confirmed via --help); DGX Spark has no ML tools installed |
-| **5** | Path 5: Lookup decoding (llama-lookup) | ❌ BLOCKED | 26% acceptance; per-step CPU-GPU sync overhead = 42% slower than baseline |
+## Why Previous Assessments Were Incomplete: TRT Edge-LLM
+
+All five blocked paths used one of two frameworks:
+- **llama.cpp**: Open-source, general-purpose. No EAGLE support. Lookup decoding blocked by sync overhead.
+- **TRT-LLM (standard)**: Server/datacenter-oriented. Its Python `trtllm-build` uses a C++ serialization buffer (`globWriter`) that requires 1 GB GPU allocation — hitting the NvMap IOVM constraint on 8 GB Jetson.
+
+**Neither is the right tool for Jetson.** NVIDIA maintains a third, purpose-built framework:
+
+**TensorRT Edge-LLM** ([github.com/NVIDIA/TensorRT-Edge-LLM](https://github.com/NVIDIA/TensorRT-Edge-LLM)) — a high-performance C++ inference runtime specifically for embedded platforms (Jetson, DRIVE). It is architecturally separate from TRT-LLM:
+
+| | TRT-LLM (what we used) | TRT Edge-LLM (new) |
+|---|---|---|
+| Target | Server/cloud GPU | Embedded: Jetson, DRIVE |
+| Engine builder | Python `trtllm-build` + globWriter (~1 GB GPU alloc) | C++ `llm_build` binary (edge-optimized, lower memory) |
+| EAGLE-3 support | No | **Yes** |
+| NVFP4 quantization | No | Yes |
+| Jetson Orin support | v0.12.0-jetson branch (64GB AGX tested) | **Experimental (JetPack 6.2.x)** |
+| Export location | On-device (blocked by IOVM on 8 GB) | **On host (DGX Spark exports, Jetson only builds)** |
+
+**Key insight:** The C++ `llm_build` in TRT Edge-LLM is purpose-designed for sub-8 GB devices. The 1 GB globWriter buffer that killed Path 2 is a Python-layer artifact of standard TRT-LLM. TRT Edge-LLM's engine builder has a fundamentally different serialization architecture targeting Jetson's memory envelope.
+
+**IOVM analysis for our models:**
+- Llama-3.2-1B INT4: ~700 MB IOVM
+- EAGLE-3 head (draft): ~50–200 MB IOVM
+- C++ runtime overhead: ~200 MB
+- **Total: ~1.0–1.1 GB → well within 2.5 GB IOVM budget**
+
+This is why EAGLE-3 is viable via TRT Edge-LLM but was not via llama.cpp (no support) or standard TRT-LLM (full-model draft = IOVM exhaustion).
 
 ---
 
-## Success Criteria (Final)
+## Path 6 — TRT Edge-LLM Llama-3.2-1B (Baseline Run)
+
+**Target:** Verify TRT Edge-LLM pipeline works on Jetson Orin JetPack 6.2.x; establish baseline vs llama.cpp  
+**Status: 🔄 NEXT**  
+**Expected: 50–75 t/s** (may match llama.cpp; confirms pipeline before EAGLE-3)
+
+### Step 1: Setup on DGX Spark (`spark-807e.local`)
+
+DGX Spark (CUDA 13.0, aarch64, 119 GB UMA) satisfies the export pipeline requirements (CUDA 12.x+, GPU with CC 8.0+).
+
+```bash
+# On DGX Spark
+python3 -m venv ~/edge_llm_env
+source ~/edge_llm_env/bin/activate
+pip install --upgrade pip setuptools wheel
+
+# Install TRT Edge-LLM Python export tools
+pip install tensorrt_edge_llm
+
+# OR clone repo for export scripts
+git clone https://github.com/NVIDIA/TensorRT-Edge-LLM.git
+cd TensorRT-Edge-LLM
+pip install -r requirements.txt
+
+# Verify
+python3 -c "import tensorrt_edge_llm; print(tensorrt_edge_llm.__version__)"
+```
+
+Note: DGX Spark runs CUDA 13.0. TRT Edge-LLM docs list CUDA 12.x+ as requirement — verify the installed wheel is compatible with CUDA 13.
+
+### Step 2: Export Llama-3.2-1B on DGX Spark
+
+Llama-3.2-1B is the target: already have HF weights or download fresh.
+
+```bash
+# On DGX Spark
+# Option A: download fresh
+huggingface-cli download meta-llama/Llama-3.2-1B-Instruct --local-dir ./llama32-1b
+
+# Export with INT4 AWQ quantization (recommended for 8 GB Jetson)
+# Exact command depends on TRT Edge-LLM version — check examples/ dir
+tensorrt-edgellm-quantize-llm \
+    --model_dir ./llama32-1b \
+    --quantization int4_awq \
+    --output_dir ./llama32_1b_onnx \
+    --dtype float16
+
+tensorrt-edgellm-export-llm \
+    --model_dir ./llama32-1b \
+    --quantized_dir ./llama32_1b_onnx \
+    --output_dir ./llama32_1b_onnx_final
+```
+
+Or use the unified export script if available in the repo:
+```bash
+python3 export.py \
+    --model_dir ./llama32-1b \
+    --quantization int4_awq \
+    --output_dir ./llama32_1b_exported \
+    --dtype float16 \
+    --max_input_len 2048 \
+    --max_output_len 512
+```
+
+**Important:** Check the actual script names and flags against the repo's `examples/` directory — the exact CLI interface varies by version. The Quick Start Guide (URL: `nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/quick-start-guide.html`) uses Qwen3-0.6B as reference; adapt for Llama-3.2-1B.
+
+### Step 3: Transfer to Jetson and Build C++ Engine
+
+```bash
+# Transfer ONNX export to Jetson (~700 MB INT4)
+scp -r ./llama32_1b_exported spitman@spitman-jetson:/home/spitman/models/trt_edge/
+
+# On Jetson — clone repo and build C++ runtime
+ssh spitman@spitman-jetson
+git clone https://github.com/NVIDIA/TensorRT-Edge-LLM.git
+cd TensorRT-Edge-LLM
+mkdir -p build && cd build
+
+cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=../cmake/aarch64_linux_toolchain.cmake
+
+make -j$(nproc)  # uses 6 CPU cores
+```
+
+Build the TRT engine on Jetson (C++ builder, not Python trtllm-build):
+```bash
+./llm_build \
+    --model_dir /home/spitman/models/trt_edge/llama32_1b_exported \
+    --output_file /home/spitman/models/trt_edge/llama32_1b.engine \
+    --max_batch_size 1 \
+    --max_input_len 2048 \
+    --max_output_len 512
+```
+
+Monitor IOVM during build:
+```bash
+# In a separate terminal — watch for NvMap errors
+dmesg -w | grep -i nvmap
+```
+
+### Step 4: Benchmark vs llama.cpp baseline
+
+TRT Edge-LLM uses a CLI binary for inference (`llm_inference`), not a Python loop. To integrate with our benchmark framework, adapt `bench_gguf.py` to call `llm_inference` with timing.
+
+**Important note on the guide's benchmarking script** (`docs/TensorRT_Edge-LLM_Guide_for_Jetson_Orin_Nano_Super.md`):
+The Python snippet using `tensorrt_edge_llm.LLMRuntime` and `runtime.generate()` does not match the actual TRT Edge-LLM API (which uses C++ CLI tools). Treat it as a conceptual template only. The actual inference command is:
+```bash
+# Create input JSON
+echo '{"input_ids": [1, 2, 3...], "max_new_tokens": 128}' > /tmp/input.json
+
+# Run inference with timing
+time ./llm_inference \
+    --engine_file /home/spitman/models/trt_edge/llama32_1b.engine \
+    --input_file /tmp/input.json
+```
+
+For throughput benchmarking, measure wall-clock time over N=128 output tokens with a fixed 512-token prompt. Compare directly to `llama-bench -n 128 -p 512 -fa 1 -ngl 99` baseline of **60.28 t/s**.
+
+### Expected outcome
+
+- **Best case:** TRT Edge-LLM C++ runtime slightly outperforms llama.cpp IQ4_XS (~65–75 t/s) due to custom kernels
+- **Likely case:** Similar performance (~55–65 t/s) — both are bandwidth-bound at 1B scale
+- **Risk:** JetPack 6.2.x experimental support may require patching; C++ build may have JetPack 6 compatibility issues
+- **IOVM risk:** LOW — 1B model + runtime stays well under 2 GB
+
+---
+
+## Path 7 — TRT Edge-LLM + EAGLE-3 Speculative Decoding (Primary 100 t/s Path)
+
+**Target:** ≥100 t/s with Llama-3.2-1B via EAGLE-3 draft head  
+**Status: 🔒 BLOCKED on Path 6 success**  
+**Expected: 120–180 t/s** (EAGLE-3 2–3× multiplier on ~60 t/s base)  
+**IOVM budget:** ~1.1 GB (base 700 MB + EAGLE head 200 MB + runtime 200 MB) — fits
+
+### Why EAGLE-3 works on Jetson where standard speculative decoding doesn't
+
+Standard speculative decoding (Path 1) required loading two full models → IOVM exhaustion.
+EAGLE-3 uses a **draft head**: a tiny (~50–300 MB) neural network that predicts future tokens using the hidden states from the main model's last layer. No second full model needed.
+
+EAGLE-3 also solves the CPU-GPU sync problem that killed lookup decoding (Path 5): because the draft head runs as a fused CUDA kernel alongside the main model, there is no CPU round-trip per step.
+
+| | Lookup decoding (Path 5, failed) | EAGLE-3 (Path 7) |
+|---|---|---|
+| Draft source | CPU n-gram hash table | GPU draft head (fused) |
+| CPU-GPU sync per step | Yes (~28 ms overhead) | No (kernel-level) |
+| IOVM cost | None (no model) | ~50–300 MB |
+| Acceptance rate | 26% | 60–80% (learned, model-specific) |
+
+### Step 1: Locate or train an EAGLE-3 head for Llama-3.2-1B
+
+**Option A — Check for pre-trained head on HuggingFace:**
+
+Search for `yuhuili/EAGLE3-LLaMA3.2-Instruct-1B` (the EAGLE-3 naming convention). The EAGLE team (yuhuili) has published heads for several Llama-3 models (8B, 70B). A 1B head may exist or be added.
+
+```bash
+# On DGX Spark
+huggingface-cli search --type model eagle llama-3.2-1b
+# OR browse: https://huggingface.co/yuhuili
+```
+
+**Option B — Train EAGLE-3 head on DGX Spark (if no pre-trained head exists):**
+
+DGX Spark (119 GB UMA, sm_121 Blackwell) is suitable for training a draft head. Training time for a 1B-target EAGLE head is ~1–2 hours on a comparable GPU.
+
+```bash
+# On DGX Spark — install prerequisites
+source ~/edge_llm_env/bin/activate
+pip install torch transformers accelerate datasets
+
+# Clone EAGLE repo
+git clone https://github.com/SafeAILab/EAGLE
+cd EAGLE
+
+# Download base model
+huggingface-cli download meta-llama/Llama-3.2-1B-Instruct --local-dir ./llama32-1b
+
+# Train EAGLE-3 draft head
+# (EAGLE repo provides train.py — check for EAGLE3 vs EAGLE2 branch)
+python3 -m eagle.ge_data.allocation \
+    --model_name_or_path ./llama32-1b \
+    --outdir ./eagle_data
+
+python3 -m eagle.train.main \
+    --tmpdir ./eagle_data \
+    --cpdir ./eagle_head_llama32_1b \
+    --basepath ./llama32-1b
+```
+
+Note: EAGLE-3 specifically (`eagle3` branch or flag) is what TRT Edge-LLM supports. Check the EAGLE repo for the EAGLE-3 training path.
+
+### Step 2: Export with EAGLE-3 head on DGX Spark
+
+```bash
+# Export base model + speculative head together
+python3 export.py \
+    --model_dir ./llama32-1b \
+    --quantization int4_awq \
+    --output_dir ./llama32_1b_base \
+    --dtype float16
+
+python3 export.py \
+    --model_dir ./eagle_head_llama32_1b \
+    --output_dir ./llama32_1b_eagle_head \
+    --speculative_mode eagle3 \
+    --dtype float16
+```
+
+### Step 3: Build speculative engine on Jetson
+
+```bash
+# Transfer both directories to Jetson
+scp -r ./llama32_1b_base ./llama32_1b_eagle_head spitman@spitman-jetson:/home/spitman/models/trt_edge/
+
+# On Jetson — build combined speculative engine
+./llm_build \
+    --model_dir /home/spitman/models/trt_edge/llama32_1b_base \
+    --speculative_model_dir /home/spitman/models/trt_edge/llama32_1b_eagle_head \
+    --output_file /home/spitman/models/trt_edge/llama32_1b_eagle3.engine \
+    --max_draft_len 5 \
+    --max_batch_size 1 \
+    --max_input_len 2048 \
+    --max_output_len 512
+```
+
+### Step 4: Benchmark
+
+Benchmark `llm_inference` with speculative engine vs baseline `llama-bench`. Target metric: wall-clock tokens/second (not the per-step eval rate — EAGLE changes the effective tokens-per-step ratio).
+
+EAGLE-3 effective throughput = (base tokens/s) × (1 + acceptance_rate × draft_len)
+
+With 70% acceptance and 5 drafts: 60 × (1 + 0.7 × 5) / verification_overhead ≈ 60 × 3.5 / 1.2 ≈ **175 t/s** theoretical (optimistic).  
+Conservative (50% acceptance, 3 drafts): 60 × 2.5 / 1.2 ≈ **125 t/s**.
+
+### Prerequisites check
+
+Before running Path 7, confirm with a quick test:
+```bash
+/home/spitman/tools/llama.cpp/build/bin/llama-speculative --help | grep -i eagle
+# Expected: nothing (we confirmed no EAGLE in llama.cpp)
+# This forces TRT Edge-LLM as the path
+```
+
+---
+
+## Execution Order (Updated — Phase 6 Reopened)
+
+| Priority | Path | Status | Result |
+|----------|------|--------|--------|
+| **1** | Path 1: Llama-3.2-3B + 1B speculative | ❌ BLOCKED | 26 t/s standalone; NvMap IOVM prevents loading two models |
+| **2** | Path 2: TRT-LLM Llama 1B W4A16 gemm_plugin | ❌ BLOCKED | globWriter 1 GB IOVM; 8 patches tried; TRT-LLM is wrong tool for 8 GB Jetson |
+| **3** | Path 3: Qwen2.5-1.5B TRT-LLM W4A16 | ❌ SKIPPED | Same IOVM constraint as Path 2 |
+| **4** | Path 4: EAGLE-3 via llama.cpp | ❌ BLOCKED | llama.cpp has no EAGLE support |
+| **5** | Path 5: Lookup decoding (llama-lookup) | ❌ BLOCKED | 26% acceptance; CPU-GPU sync overhead = 42% slower than baseline |
+| **6** | **Path 6: TRT Edge-LLM Llama-3.2-1B (baseline)** | 🔄 **NEXT** | Setup DGX Spark + export + C++ engine build on Jetson |
+| **7** | **Path 7: TRT Edge-LLM + EAGLE-3** | 🔒 After Path 6 | Draft head + speculative engine; primary 100 t/s route |
+
+---
+
+## Success Criteria (Updated)
 
 | Milestone | Status | Result | Model |
 |-----------|--------|--------|-------|
 | ✅ Phase 5 best | Achieved | 100.87 t/s | Qwen2.5-0.5B TRT-LLM W4A16 |
 | ✅ New >1B record | Achieved | **65.64 t/s** | LFM2 1.2B IQ4_XS + FA (llama.cpp) |
 | ✅ New Llama 1B record | Achieved | **60.28 t/s** | Llama 3.2 1B IQ4_XS + FA (llama.cpp) |
-| ❌ Phase 6 primary goal | BLOCKED | ≥100 t/s | All speculative/kernel paths exhausted |
+| 🔄 Path 6 gate | Pending | TRT Edge-LLM works | Jetson Orin JetPack 6.2 experimental support confirmed |
+| 🎯 Path 7 primary goal | Pending | ≥100 t/s | Llama 3.2 1B + EAGLE-3 via TRT Edge-LLM |
+| 🎯 Stretch goal | Pending | ≥150 t/s | Llama 3.2 1B + EAGLE-3 (70%+ acceptance) |
 
-**Final assessment:** The 100 t/s + >1B params target on Jetson Orin Nano 8 GB is not achievable with current hardware and software stack. The binding constraint is NvMap IOVM (~2.5 GB virtual address space) which prevents both: (a) loading two models simultaneously for speculative decoding, and (b) building TRT-LLM engines with the gemm_plugin. llama.cpp lookup decoding is additionally blocked by per-step sync overhead. The 65.64 t/s LFM2 1.2B result (60.9% bandwidth utilization) represents near-optimal performance for a single 1B+ model on this hardware.
+**Revised assessment:** TRT Edge-LLM (a separate NVIDIA framework from TRT-LLM) was not considered in Paths 1–5. It is purpose-built for embedded Jetson/DRIVE hardware and supports EAGLE-3 speculative decoding — the two capabilities that blocked all previous paths. DGX Spark handles the heavy export/quantization; Jetson's C++ `llm_build` avoids the globWriter IOVM bottleneck. JetPack 6.2.x is listed as experimental (vs officially supported JetPack 7.1), so compatibility testing is the first risk to resolve (Path 6).
