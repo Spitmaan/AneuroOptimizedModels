@@ -368,8 +368,10 @@ This is why EAGLE-3 is viable via TRT Edge-LLM but was not via llama.cpp (no sup
 
 DGX Spark (CUDA 13.0, aarch64, 119 GB UMA) satisfies the export pipeline requirements (CUDA 12.x+, GPU with CC 8.0+).
 
+**Option A — pip install (preferred):**
 ```bash
 # On DGX Spark
+sudo apt update && sudo apt install python3-pip python3-venv -y
 python3 -m venv ~/edge_llm_env
 source ~/edge_llm_env/bin/activate
 pip install --upgrade pip setuptools wheel
@@ -377,16 +379,24 @@ pip install --upgrade pip setuptools wheel
 # Install TRT Edge-LLM Python export tools
 pip install tensorrt_edge_llm
 
-# OR clone repo for export scripts
+# Clone repo for access to example export scripts
 git clone https://github.com/NVIDIA/TensorRT-Edge-LLM.git
 cd TensorRT-Edge-LLM
 pip install -r requirements.txt
 
-# Verify
-python3 -c "import tensorrt_edge_llm; print(tensorrt_edge_llm.__version__)"
+# Verify — should print version and recognize Blackwell GB10
+python3 -c "import tensorrt_edge_llm, tensorrt as trt; print(tensorrt_edge_llm.__version__, trt.__version__)"
 ```
 
-Note: DGX Spark runs CUDA 13.0. TRT Edge-LLM docs list CUDA 12.x+ as requirement — verify the installed wheel is compatible with CUDA 13.
+**Option B — NGC container (isolated, avoids CUDA version conflicts):**
+```bash
+# Pull official NVIDIA container (includes TRT, CUDA, all dependencies)
+docker pull nvcr.io/nvidia/tensorrt-llm/release:spark-single-gpu-dev
+docker run --rm -it --gpus all -v $(pwd):/workspace \
+  nvcr.io/nvidia/tensorrt-llm/release:spark-single-gpu-dev
+```
+
+**CUDA 13.0 compatibility note:** TRT Edge-LLM docs list CUDA 12.x+ as requirement. DGX Spark runs CUDA 13.0 — verify the installed wheel works before proceeding. If `import tensorrt_edge_llm` fails, use the NGC container instead (Option B), which bundles a tested CUDA version.
 
 ### Step 2: Export Llama-3.2-1B on DGX Spark
 
@@ -426,37 +436,84 @@ python3 export.py \
 
 ### Step 3: Transfer to Jetson and Build C++ Engine
 
+**Pre-flight: set Jetson to MAXN SUPER mode** (required for 67 TOPS; do this first every session):
 ```bash
-# Transfer ONNX export to Jetson (~700 MB INT4)
-scp -r ./llama32_1b_exported spitman@spitman-jetson:/home/spitman/models/trt_edge/
-
-# On Jetson — clone repo and build C++ runtime
 ssh spitman@spitman-jetson
+sudo nvpmodel -m 0      # MAXN SUPER mode (25W max, full GPU clocks)
+sudo jetson_clocks      # lock all clocks to maximum frequency
+```
+
+**Transfer ONNX export to Jetson:**
+```bash
+# From DGX Spark
+scp -r ./llama32_1b_exported spitman@spitman-jetson:/home/spitman/models/trt_edge/
+```
+
+**Build C++ runtime on Jetson:**
+```bash
 git clone https://github.com/NVIDIA/TensorRT-Edge-LLM.git
 cd TensorRT-Edge-LLM
 mkdir -p build && cd build
 
+# Option A — from official Quick Start docs:
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=../cmake/aarch64_linux_toolchain.cmake
 
-make -j$(nproc)  # uses 6 CPU cores
+# Option B — from guide (may be required for Jetson Orin target):
+# cmake .. -DCMAKE_BUILD_TYPE=Release -DEMBEDDED_TARGET=jetson-orin
+
+# Try Option A first; if CMake errors, try Option B or both flags combined
+make -j$(nproc)  # 6 CPU cores on Jetson Orin Nano
 ```
 
-Build the TRT engine on Jetson (C++ builder, not Python trtllm-build):
+**Build the TRT engine** (C++ `engine_builder` / `llm_build` — same binary, different path aliases depending on version):
 ```bash
+# Binary location varies by TRT Edge-LLM version:
+# Quick Start docs: ./llm_build
+# Compiled binary: ./examples/engine_builder/engine_builder
+# Try both; use whichever exists after 'make'
+
 ./llm_build \
     --model_dir /home/spitman/models/trt_edge/llama32_1b_exported \
     --output_file /home/spitman/models/trt_edge/llama32_1b.engine \
     --max_batch_size 1 \
     --max_input_len 2048 \
-    --max_output_len 512
+    --max_output_len 512 \
+    --mmap  # use --mmap if available: limits peak memory during serialization on 8 GB device
 ```
 
-Monitor IOVM during build:
+**Monitor IOVM during build** (in a separate terminal):
 ```bash
-# In a separate terminal — watch for NvMap errors
 dmesg -w | grep -i nvmap
+```
+
+**If engine build OOMs** (Jetson crashes or NvMap error during build — not inference):
+```bash
+# Increase swap temporarily
+sudo fallocate -l 4G /swapfile2
+sudo chmod 600 /swapfile2
+sudo mkswap /swapfile2
+sudo swapon /swapfile2
+# Re-run engine build, then remove swap when done
+```
+
+**Alternative: jetson-containers pre-built environment** (avoids C++ build entirely if it fails):
+```bash
+git clone https://github.com/dusty-nv/jetson-containers.git
+cd jetson-containers
+./run.sh $(./autotag tensorrt_edgellm)
+# Provides a container with TRT Edge-LLM runtime pre-compiled for JetPack 6.2
+```
+
+**Quick inference test** using the chat binary:
+```bash
+# Quick Start docs: llm_inference --engine_file ... --input_file ...
+# Guide binary: ./examples/chat/chat --engine_file ... --tokenizer_dir ...
+# Use whichever binary is compiled; both confirm the engine loaded correctly
+./examples/chat/chat \
+    --engine_file /home/spitman/models/trt_edge/llama32_1b.engine \
+    --tokenizer_dir /home/spitman/models/trt_edge/llama32_1b_exported/tokenizer
 ```
 
 ### Step 4: Benchmark vs llama.cpp baseline
@@ -511,12 +568,17 @@ EAGLE-3 also solves the CPU-GPU sync problem that killed lookup decoding (Path 5
 
 **Option A — Check for pre-trained head on HuggingFace:**
 
-Search for `yuhuili/EAGLE3-LLaMA3.2-Instruct-1B` (the EAGLE-3 naming convention). The EAGLE team (yuhuili) has published heads for several Llama-3 models (8B, 70B). A 1B head may exist or be added.
+The EAGLE team (`yuhuili` on HuggingFace) publishes pre-trained EAGLE/EAGLE-3 heads. Known published heads as of early 2026:
+- `yuhuili/EAGLE-LLaMA3-Instruct-8B` (EAGLE-2 for Llama-3-8B — confirmed in guide)
+- `yuhuili/EAGLE3-LLaMA3.2-Instruct-1B` (EAGLE-3 for Llama-3.2-1B — **check if published**)
 
 ```bash
-# On DGX Spark
-huggingface-cli search --type model eagle llama-3.2-1b
-# OR browse: https://huggingface.co/yuhuili
+# On DGX Spark — search for 1B head
+huggingface-cli search --type model "eagle llama-3.2-1b"
+huggingface-cli search --type model "eagle3 llama"
+# Direct check:
+huggingface-cli download yuhuili/EAGLE3-LLaMA3.2-Instruct-1B --local-dir ./eagle3-head-1b 2>&1 | head -5
+# If 404 → not published; proceed to Option B (train on DGX Spark)
 ```
 
 **Option B — Train EAGLE-3 head on DGX Spark (if no pre-trained head exists):**
@@ -573,6 +635,7 @@ python3 export.py \
 scp -r ./llama32_1b_base ./llama32_1b_eagle_head spitman@spitman-jetson:/home/spitman/models/trt_edge/
 
 # On Jetson — build combined speculative engine
+# Binary alias: ./llm_build OR ./examples/engine_builder/engine_builder (same tool)
 ./llm_build \
     --model_dir /home/spitman/models/trt_edge/llama32_1b_base \
     --speculative_model_dir /home/spitman/models/trt_edge/llama32_1b_eagle_head \
@@ -580,8 +643,18 @@ scp -r ./llama32_1b_base ./llama32_1b_eagle_head spitman@spitman-jetson:/home/sp
     --max_draft_len 5 \
     --max_batch_size 1 \
     --max_input_len 2048 \
-    --max_output_len 512
+    --max_output_len 512 \
+    --mmap  # add if flag exists — reduces peak memory during serialization
 ```
+
+**⚠️ Critical: avoid the guide's `trtllm-build` command**
+
+The "Speculative Engine Example" section in `docs/TensorRT_Edge-LLM_Guide_for_Jetson_Orin_Nano_Super.md` shows:
+```bash
+# DO NOT USE — this is standard TRT-LLM (server product), not TRT Edge-LLM
+trtllm-build --checkpoint_dir ... --speculative_decoding_mode draft_tokens_external ...
+```
+This command (`trtllm-build`) belongs to standard TRT-LLM — the same Python-based tool that hit the globWriter 1 GB IOVM blocker in Path 2. The guide incorrectly mixes TRT-LLM API into an Edge-LLM section. The correct speculative build path for TRT Edge-LLM is `engine_builder --speculative_model_dir`, not `trtllm-build`.
 
 ### Step 4: Benchmark
 
