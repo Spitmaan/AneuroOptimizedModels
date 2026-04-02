@@ -676,7 +676,219 @@ Before running Path 7, confirm with a quick test:
 
 ---
 
-## Execution Order (Updated — Phase 6 Reopened)
+---
+
+## Multi-Model Sweep: Bandwidth Ceilings and EAGLE-3 Targets
+
+Paths 8–10 extend the TRT Edge-LLM approach to Qwen2.5, LFM, and larger Llama models. The strategy is to **start large (7–8B) and work down** — largest model that can hit 100 t/s wins.
+
+### Memory fit on 8 GB Jetson (INT4 AWQ)
+
+| Model | INT4 size | KV cache (2K ctx) | Runtime | Total | Fits 8 GB? |
+|-------|----------:|------------------:|--------:|------:|:----------:|
+| Llama-3.2-1B | ~0.7 GB | ~0.1 GB | ~0.3 GB | ~1.1 GB | ✅ |
+| Llama-3.2-3B | ~1.9 GB | ~0.2 GB | ~0.3 GB | ~2.4 GB | ✅ |
+| Qwen2.5-1.5B | ~1.0 GB | ~0.1 GB | ~0.3 GB | ~1.4 GB | ✅ |
+| Qwen2.5-3B | ~1.9 GB | ~0.2 GB | ~0.3 GB | ~2.4 GB | ✅ |
+| Qwen2.5-7B | ~4.0 GB | ~0.4 GB | ~0.4 GB | ~4.8 GB | ✅ (tight) |
+| Llama-3.1-8B | ~4.5 GB | ~0.4 GB | ~0.4 GB | ~5.3 GB | ✅ (tight) |
+| Qwen2.5-14B | ~8.5 GB | — | — | >8 GB | ❌ |
+| LFM2.5-1.2B | ~0.7 GB | ~0.1 GB | ~0.3 GB | ~1.1 GB | ✅ (arch risk) |
+
+OS + background processes take ~1.5 GB, so practical headroom is ~6.5 GB usable.
+
+### EAGLE-3 effective throughput projections
+
+| Model | Standalone t/s (est.) | 2.5× EAGLE | 3.5× EAGLE | Hits 100 t/s? |
+|-------|----------------------:|:----------:|:----------:|:-------------:|
+| Llama-3.2-1B | ~60 | 150 | 210 | ✅ |
+| Llama-3.2-3B | ~26 | 65 | 91 | ❌ (marginal) |
+| Qwen2.5-1.5B | ~50 | 125 | 175 | ✅ |
+| Qwen2.5-3B | ~28 | 70 | 98 | ❌ (marginal) |
+| Qwen2.5-7B | ~14 | 35 | 49 | ❌ |
+| Llama-3.1-8B | ~12 | 30 | 42 | ❌ |
+
+**Key finding from this analysis:** 100 t/s is achievable with 1–1.5B models via EAGLE-3. 3B models are borderline (depends on acceptance rate). 7–8B models cannot realistically hit 100 t/s on 68 GB/s bandwidth regardless of EAGLE acceleration — but they establish absolute performance records for the largest models deployable on this hardware.
+
+**Test order rationale:** Start 7B/8B (largest possible, benchmark record) → 3B (borderline, may hit 100) → 1.5B (Qwen2.5 is a stronger architecture than Llama at same size) → LFM2.5 (arch uncertainty).
+
+---
+
+## Path 8 — TRT Edge-LLM: Larger Llama Models (3B + 8B)
+
+**Status: 🔒 After Path 7 (pipeline validated)**  
+**Goal:** Largest Llama model that fits 8 GB; benchmark record for >3B on Jetson; 3B + EAGLE-3 may hit 100 t/s
+
+### 8A: Llama-3.2-3B (we already have IQ4_XS GGUF at 1.7 GB)
+
+We confirmed Llama-3.2-3B-IQ4_XS at **26.01 t/s standalone** in Path 1. TRT Edge-LLM INT4 AWQ may improve this via custom kernels. EAGLE-3 + 3B needs ~75%+ acceptance to hit 100 t/s — achievable for on-domain tasks.
+
+```bash
+# On DGX Spark — export 3B (DGX 119 GB handles this trivially)
+huggingface-cli download meta-llama/Llama-3.2-3B-Instruct --local-dir ./llama32-3b
+
+python3 export.py \
+    --model_dir ./llama32-3b \
+    --quantization int4_awq \
+    --output_dir ./llama32_3b_exported \
+    --dtype float16 \
+    --max_input_len 2048 \
+    --max_output_len 512
+```
+
+EAGLE-3 head for 3B:
+```bash
+# Check for pre-trained head
+huggingface-cli download yuhuili/EAGLE3-LLaMA3.2-Instruct-3B --local-dir ./eagle3-3b 2>&1 | head -5
+# If exists: export with --speculative_mode eagle3
+# If not: train on DGX Spark (same EAGLE training pipeline as Path 7)
+```
+
+Engine build on Jetson: same pipeline as Path 7. Export size ~1.9 GB INT4, EAGLE head ~150 MB.
+
+### 8B: Llama-3.1-8B (start here — largest viable model on 8 GB)
+
+Llama-3.1-8B INT4 AWQ is confirmed to run on Jetson Orin (64 GB AGX; ~35 t/s per TRT-LLM README4Jetson). On our 8 GB Nano, engine fit is the primary risk. EAGLE-3 at 8B cannot hit 100 t/s but sets the absolute largest-model benchmark.
+
+```bash
+# On DGX Spark — 8B export requires ~20+ GB RAM (DGX Spark 119 GB handles it)
+huggingface-cli download meta-llama/Llama-3.1-8B-Instruct --local-dir ./llama31-8b
+
+python3 export.py \
+    --model_dir ./llama31-8b \
+    --quantization int4_awq \
+    --output_dir ./llama31_8b_exported \
+    --dtype float16 \
+    --max_input_len 1024 \
+    --max_output_len 256  # conservative — reduce KV pressure on 8 GB Jetson
+```
+
+EAGLE-3 head for 8B (most likely to exist pre-trained):
+```bash
+huggingface-cli download yuhuili/EAGLE3-LLaMA3.1-Instruct-8B --local-dir ./eagle3-8b 2>&1 | head -5
+```
+
+**Memory risk on Jetson:** 8B INT4 ≈ 4.5 GB + KV + runtime ≈ 5.3 GB total. With OS at ~1.5 GB, total ≈ 6.8 GB — within 8 GB but tight. If Jetson OOMs during build:
+- Reduce `--max_input_len` to 512 (smaller KV cache)
+- Use swap during build only (not inference)
+- Consider `--kv_cache_free_gpu_memory_fraction 0.05` at inference time
+
+### Expected 8B results
+
+| Config | Expected t/s | Notes |
+|--------|-------------:|-------|
+| Llama-3.1-8B INT4 standalone | ~12–15 t/s | Bandwidth-bound; 68 GB/s / ~4.5 GB = ~15 t/s theoretical |
+| Llama-3.1-8B + EAGLE-3 (50% accept) | ~30–40 t/s | Not 100 t/s, but largest model ever run on this hardware |
+| Llama-3.2-3B INT4 standalone | ~25–30 t/s | |
+| Llama-3.2-3B + EAGLE-3 (70% accept) | ~80–100 t/s | Borderline 100 t/s |
+
+---
+
+## Path 9 — TRT Edge-LLM: Qwen2.5 Series (7B, 3B, 1.5B)
+
+**Status: 🔒 After Path 8**  
+**Goal:** Qwen2.5-7B is the priority (largest model with confirmed TRT Edge-LLM support); Qwen2.5-1.5B is the best candidate for 100 t/s after Llama-1B  
+**Architecture note:** Qwen2.5 is explicitly listed in TRT Edge-LLM's supported model list (Qwen 2/2.5/3). No architecture risk.
+
+### 9A: Qwen2.5-7B — start here (largest Qwen that fits 8 GB)
+
+```bash
+# On DGX Spark
+huggingface-cli download Qwen/Qwen2.5-7B-Instruct --local-dir ./qwen25-7b
+
+python3 export.py \
+    --model_dir ./qwen25-7b \
+    --quantization int4_awq \
+    --output_dir ./qwen25_7b_exported \
+    --dtype float16 \
+    --max_input_len 2048 \
+    --max_output_len 512
+```
+
+EAGLE-3 head for Qwen2.5-7B:
+```bash
+huggingface-cli download yuhuili/EAGLE3-Qwen2.5-7B-Instruct --local-dir ./eagle3-qwen7b 2>&1 | head -5
+```
+
+### 9B: Qwen2.5-3B
+
+```bash
+huggingface-cli download Qwen/Qwen2.5-3B-Instruct --local-dir ./qwen25-3b
+
+python3 export.py --model_dir ./qwen25-3b --quantization int4_awq \
+    --output_dir ./qwen25_3b_exported --dtype float16 \
+    --max_input_len 2048 --max_output_len 512
+```
+
+### 9C: Qwen2.5-1.5B — secondary 100 t/s candidate
+
+Qwen2.5-1.5B is a strong architecture with known high benchmark scores at 1.5B scale. Standalone ~50 t/s expected; EAGLE-3 target ~125–175 t/s. Likely the second model (after Llama-1B) to hit 100 t/s.
+
+```bash
+huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct --local-dir ./qwen25-1p5b
+
+python3 export.py --model_dir ./qwen25-1p5b --quantization int4_awq \
+    --output_dir ./qwen25_1p5b_exported --dtype float16 \
+    --max_input_len 2048 --max_output_len 512
+```
+
+EAGLE-3 head for Qwen2.5-1.5B:
+```bash
+huggingface-cli download yuhuili/EAGLE3-Qwen2.5-1.5B-Instruct --local-dir ./eagle3-qwen1p5b 2>&1 | head -5
+```
+
+### Expected Qwen2.5 results
+
+| Config | Expected t/s | Notes |
+|--------|-------------:|-------|
+| Qwen2.5-7B INT4 standalone | ~14 t/s | ~4 GB model; bandwidth-bound same as Llama-8B |
+| Qwen2.5-7B + EAGLE-3 (55% accept) | ~35–45 t/s | Best result for a 7B model on 8 GB |
+| Qwen2.5-3B INT4 standalone | ~28 t/s | |
+| Qwen2.5-3B + EAGLE-3 (70% accept) | ~80–100 t/s | Borderline 100 t/s |
+| Qwen2.5-1.5B INT4 standalone | ~50 t/s | Qwen architecture efficient at small scale |
+| Qwen2.5-1.5B + EAGLE-3 (65% accept) | ~120–150 t/s | Strong 100 t/s candidate |
+
+Note: We already have Qwen2.5-0.5B at 100.87 t/s via TRT-LLM W4A16 (Path 5/Phase 5). The Qwen2.5-1.5B + EAGLE-3 result would be the first time a **>1B Qwen** hits 100 t/s.
+
+---
+
+## Path 10 — TRT Edge-LLM: LFM2.5-1.2B
+
+**Status: 🔒 After Path 9**  
+**Goal:** LFM2.5 via TRT Edge-LLM — potential improvement over our current best (65.64 t/s IQ4_XS + FA)  
+**⚠️ Architecture risk: HIGH**
+
+### Why LFM2.5 is last
+
+LFM2.5-1.2B is a **Recurrent Hybrid Model (LSTM + Attention)** — not a standard Transformer. TRT Edge-LLM's officially supported model list includes only attention-based architectures (Llama, Qwen, DeepSeek). SSM/hybrid architectures were explicitly blocked in standard TRT-LLM (Path 2/Phase 5 Stage XX).
+
+**Check before attempting:**
+```bash
+# On DGX Spark — try export and see if it fails at model load
+huggingface-cli download liquid-ai/LFM2.5-1.2B-Instruct --local-dir ./lfm25-1b
+
+python3 export.py --model_dir ./lfm25-1b --quantization int4_awq \
+    --output_dir ./lfm25_exported --dtype float16 2>&1 | head -20
+# If it fails with "unsupported architecture" or KeyError — blocked, same as TRT-LLM
+# If it succeeds — proceed to Jetson engine build
+```
+
+EAGLE-3 for LFM2.5: pre-trained heads almost certainly don't exist (non-standard arch). Training an EAGLE-3 head for a hybrid LSTM model requires adapting the EAGLE framework to produce LSTM hidden states rather than attention hidden states — significantly more complex than the Llama/Qwen case.
+
+### What success looks like
+
+If TRT Edge-LLM supports LFM2.5:
+- Standalone INT4: ~65–75 t/s (may match or slightly beat llama.cpp IQ4_XS)
+- With EAGLE-3 (if trainable): ~150–200 t/s — the largest potential gain
+- **IOVM budget:** 1.2B INT4 ≈ 700 MB + EAGLE head ≈ 200 MB + runtime ≈ 300 MB = 1.2 GB ✅
+
+### LFM3 consideration
+
+LiquidAI may release LFM3 variants in larger sizes (3B, 7B) after 2026. If available, the same Path 10 workflow applies — check architecture support in TRT Edge-LLM first, then export on DGX Spark.
+
+---
+
+## Execution Order (Full — Phase 6)
 
 | Priority | Path | Status | Result |
 |----------|------|--------|--------|
@@ -686,19 +898,24 @@ Before running Path 7, confirm with a quick test:
 | **4** | Path 4: EAGLE-3 via llama.cpp | ❌ BLOCKED | llama.cpp has no EAGLE support |
 | **5** | Path 5: Lookup decoding (llama-lookup) | ❌ BLOCKED | 26% acceptance; CPU-GPU sync overhead = 42% slower than baseline |
 | **6** | **Path 6: TRT Edge-LLM Llama-3.2-1B (baseline)** | 🔄 **NEXT** | Setup DGX Spark + export + C++ engine build on Jetson |
-| **7** | **Path 7: TRT Edge-LLM + EAGLE-3** | 🔒 After Path 6 | Draft head + speculative engine; primary 100 t/s route |
+| **7** | **Path 7: TRT Edge-LLM Llama-3.2-1B + EAGLE-3** | 🔒 After Path 6 | Primary 100 t/s route for Llama 1B |
+| **8** | **Path 8: TRT Edge-LLM Llama-3.1-8B + Llama-3.2-3B** | 🔒 After Path 7 | Largest Llama models; 3B borderline for 100 t/s |
+| **9** | **Path 9: TRT Edge-LLM Qwen2.5-7B / 3B / 1.5B** | 🔒 After Path 8 | Qwen2.5-1.5B strong 100 t/s candidate; 7B sets large-model record |
+| **10** | **Path 10: TRT Edge-LLM LFM2.5-1.2B** | 🔒 After Path 9 | Architecture support uncertain; highest upside if it works |
 
 ---
 
-## Success Criteria (Updated)
+## Success Criteria (Final)
 
-| Milestone | Status | Result | Model |
+| Milestone | Status | Target | Model |
 |-----------|--------|--------|-------|
 | ✅ Phase 5 best | Achieved | 100.87 t/s | Qwen2.5-0.5B TRT-LLM W4A16 |
-| ✅ New >1B record | Achieved | **65.64 t/s** | LFM2 1.2B IQ4_XS + FA (llama.cpp) |
-| ✅ New Llama 1B record | Achieved | **60.28 t/s** | Llama 3.2 1B IQ4_XS + FA (llama.cpp) |
-| 🔄 Path 6 gate | Pending | TRT Edge-LLM works | Jetson Orin JetPack 6.2 experimental support confirmed |
-| 🎯 Path 7 primary goal | Pending | ≥100 t/s | Llama 3.2 1B + EAGLE-3 via TRT Edge-LLM |
-| 🎯 Stretch goal | Pending | ≥150 t/s | Llama 3.2 1B + EAGLE-3 (70%+ acceptance) |
+| ✅ >1B record (llama.cpp) | Achieved | **65.64 t/s** | LFM2 1.2B IQ4_XS + FA |
+| ✅ Llama 1B record (llama.cpp) | Achieved | **60.28 t/s** | Llama 3.2 1B IQ4_XS + FA |
+| 🔄 Path 6 gate | Pending | Pipeline works | TRT Edge-LLM on JetPack 6.2 confirmed |
+| 🎯 Primary: 100 t/s with >1B | Pending | ≥100 t/s | Llama 3.2 1B + EAGLE-3 |
+| 🎯 Qwen 100 t/s with >1B | Pending | ≥100 t/s | Qwen2.5-1.5B + EAGLE-3 |
+| 🎯 Largest model record | Pending | Best t/s | Llama-3.1-8B or Qwen2.5-7B |
+| 🎯 3B 100 t/s stretch | Pending | ≥100 t/s | Llama-3.2-3B or Qwen2.5-3B + EAGLE-3 |
 
-**Revised assessment:** TRT Edge-LLM (a separate NVIDIA framework from TRT-LLM) was not considered in Paths 1–5. It is purpose-built for embedded Jetson/DRIVE hardware and supports EAGLE-3 speculative decoding — the two capabilities that blocked all previous paths. DGX Spark handles the heavy export/quantization; Jetson's C++ `llm_build` avoids the globWriter IOVM bottleneck. JetPack 6.2.x is listed as experimental (vs officially supported JetPack 7.1), so compatibility testing is the first risk to resolve (Path 6).
+**Overall strategy:** Validate the TRT Edge-LLM + EAGLE-3 pipeline on Llama-3.2-1B (Paths 6–7), then sweep larger Llama (Path 8), Qwen2.5 (Path 9), and LFM2.5 (Path 10). Each path follows the identical DGX Spark export → Jetson `llm_build` workflow. Path 6 is the gate — if JetPack 6.2 experimental support fails, all subsequent paths are blocked by the same issue.
