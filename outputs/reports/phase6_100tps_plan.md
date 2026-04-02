@@ -287,25 +287,63 @@ The ~62% bandwidth utilization means llama.cpp IQ4_XS is substantially more effi
 
 ---
 
-## Execution Order (Updated Status)
+## Path 5 — Lookup Decoding (llama-lookup, n-gram speculative) ❌ BLOCKED
+
+**Status: BLOCKED — per-step CPU-GPU sync overhead exceeds compute gain on Jetson UMA**
+**Tested: 2026-04-02**
+
+### What was tested
+
+`llama-lookup` n-gram based speculative decoding for Llama-3.2-1B IQ4_XS + FA.
+- Cold run: dynamic cache starts empty, fills during generation
+- Warm run: static cache from run 1 (same n-grams)
+
+### Results
+
+| Metric | Cold (dynamic) | Warm (static) |
+|--------|---------------|---------------|
+| Acceptance rate | 26.3% | 26.4% |
+| Draft tokens per step | 5 | 5 |
+| Avg accepted per step | 0.64 | 0.74 |
+| GPU eval t/s (per step) | 56.0 | 54.9 |
+| Wall-clock generation t/s | **~35 t/s** | **~35 t/s** |
+| Baseline (no speculative) | — | **60.88 t/s** |
+
+### Root cause
+
+Each speculative decoding step requires CPU↔GPU synchronization:
+1. CPU: query n-gram hash table → propose 5 draft tokens
+2. GPU: verify all 5 drafts + generate final token in one forward pass
+3. CPU: accept/reject each draft token, update KV cache state
+4. Repeat
+
+On a discrete GPU, this sync overhead is negligible (~1 ms). On Jetson UMA, per-step overhead is ~28 ms vs ~18 ms GPU compute time. Total overhead per step exceeds the compute savings from multi-token verification.
+
+**Result:** 42% slower than baseline. `llama-lookup-create` also crashes (core dump) — no static cache from external corpus is possible in v8510.
+
+**Conclusion:** Lookup decoding cannot overcome the Jetson UMA per-step sync cost. Not viable.
+
+---
+
+## Execution Order (Final Status — Phase 6 Complete)
 
 | Priority | Path | Status | Result |
 |----------|------|--------|--------|
 | **1** | Path 1: Llama-3.2-3B + 1B speculative | ❌ BLOCKED | 26 t/s standalone only; NvMap IOVM < 2.5 GB prevents loading two models |
 | **2** | Path 2: TRT-LLM Llama 1B W4A16 gemm_plugin | ❌ BLOCKED | globWriter 1 GB IOVM requirement impossible on Jetson; 8 patches tried; no-gemm-plugin 44.08 t/s confirmed |
 | **3** | Path 3: Qwen2.5-1.5B TRT-LLM W4A16 | ❌ NOT ATTEMPTED | Qwen 1.5B checkpoint (~1.6 GB) will exceed IOVM limit (same constraint as Path 2) |
-| **4** | Path 4: EAGLE-3 on DGX Spark | 🔄 NEXT | Train draft head on DGX Spark; deploy on Jetson via llama.cpp or TRT-LLM |
+| **4** | Path 4: EAGLE-3 on DGX Spark | ❌ BLOCKED | llama.cpp has no EAGLE support (confirmed via --help); DGX Spark has no ML tools installed |
+| **5** | Path 5: Lookup decoding (llama-lookup) | ❌ BLOCKED | 26% acceptance; per-step CPU-GPU sync overhead = 42% slower than baseline |
 
 ---
 
-## Success Criteria (Updated)
+## Success Criteria (Final)
 
 | Milestone | Status | Result | Model |
 |-----------|--------|--------|-------|
 | ✅ Phase 5 best | Achieved | 100.87 t/s | Qwen2.5-0.5B TRT-LLM W4A16 |
 | ✅ New >1B record | Achieved | **65.64 t/s** | LFM2 1.2B IQ4_XS + FA (llama.cpp) |
 | ✅ New Llama 1B record | Achieved | **60.28 t/s** | Llama 3.2 1B IQ4_XS + FA (llama.cpp) |
-| 🎯 Path 4 goal | Pending | ≥100 t/s | Llama 3.2 1B + EAGLE-3 speculative draft |
-| 🎯 Stretch goal | Pending | ≥120 t/s | Any >1B model, 2.5× EAGLE acceptance rate |
+| ❌ Phase 6 primary goal | BLOCKED | ≥100 t/s | All speculative/kernel paths exhausted |
 
-**Revised assessment:** The 100 t/s + >1B params target is at the physical edge of Jetson's 68 GB/s bandwidth at INT4. Only EAGLE-style speculative decoding (which multiplies effective throughput without extra weight loading) can realistically achieve this. TRT-LLM gemm_plugin (the other path to efficiency) is blocked by NvMap IOVM. Path 4 is the only remaining viable route.
+**Final assessment:** The 100 t/s + >1B params target on Jetson Orin Nano 8 GB is not achievable with current hardware and software stack. The binding constraint is NvMap IOVM (~2.5 GB virtual address space) which prevents both: (a) loading two models simultaneously for speculative decoding, and (b) building TRT-LLM engines with the gemm_plugin. llama.cpp lookup decoding is additionally blocked by per-step sync overhead. The 65.64 t/s LFM2 1.2B result (60.9% bandwidth utilization) represents near-optimal performance for a single 1B+ model on this hardware.

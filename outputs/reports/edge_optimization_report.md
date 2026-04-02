@@ -798,14 +798,15 @@ All optimizations identified but not yet implemented. Sorted by **expected gain 
 
 ---
 
-### Tier 4 — IQ4_XS, EAGLE-3, TensorRT-LLM (Stages XVIII–XX) 🔄 In Progress (XX pending)
+### Tier 4 — IQ4_XS, EAGLE-3, TensorRT-LLM, Speculative (Stages XVIII–XXII) ✅ Complete
 
 | Stage | Title | Status | Key Finding |
 |-------|-------|--------|-------------|
 | **XVIII** | IQ4_XS for LFM2.5 from patched F16 | ✅ Complete | **+10.8% tg128** (58.98 vs 53.22 t/s); ARC −10pp (60% vs 70%) — calibration corpus too narrow (wikitext-2 only). Speed win is real; accuracy recoverable with better imatrix. |
-| **XIX** | EAGLE-3 speculative decoding | ❌ Blocked | Requires external GPU for training. SSM+attention hybrid architecture (10 of 16 layers are SSM) complicates standard EAGLE approach. ~2–3× speedup potential if unblocked. |
+| **XIX** | EAGLE-3 speculative decoding | ❌ Blocked | Requires external GPU for training. SSM+attention hybrid architecture (10 of 16 layers are SSM) complicates standard EAGLE approach. llama.cpp has no EAGLE support (confirmed v8510). ~2–3× speedup potential if unblocked via custom framework. |
 | **XX** | TensorRT-LLM W4A16 | ✅ Partial (Qwen only) | Qwen2.5-0.5B: **+86% pp, +7.4% tg** (100.87 vs 93.92 t/s). LFM2.5 blocked (SSM arch). Llama: 44.08 t/s (no improvement; gemm_plugin build OOMs on 8 GB Jetson serialization buffer). Extended analysis (8 patches, custom IGpuAllocator, share_embedding_table fix) confirms gemm_plugin permanently blocked by NvMap IOVM. |
 | **XXI** | llama.cpp IQ4_XS + FA updated baselines | ✅ Complete | LFM2 1.2B IQ4_XS+FA: **65.64 t/s** (new >1B record, 60.9% BW). Llama 3.2 1B IQ4_XS+FA: **60.28 t/s** (62.1% BW). Both beat TRT-LLM no-gemm-plugin (44.08 t/s). IQ4_XS outperforms Q3_K_M (41 t/s) despite larger size — better GPU kernel efficiency on sm_87. |
+| **XXII** | Lookup decoding (llama-lookup n-gram speculative) | ❌ Blocked | Llama 3.2 1B IQ4_XS+FA tested with 5-token n-gram drafts. Acceptance rate: 26%. GPU kernel eval: 55 t/s (vs 60.88 baseline). Wall-clock generation: **~35 t/s (42% slower than baseline)**. Root cause: per-step CPU↔GPU sync overhead (~28 ms/step) exceeds GPU compute time (~18 ms/step) on Jetson UMA. `llama-lookup-create` also crashes (v8510 bug). |
 
 **4K context production recommendation (from Tier 3):** Add `-ctk q4_0 -ctv q4_0` to long-context deployments — zero speed penalty, ~2× KV VRAM savings.
 
