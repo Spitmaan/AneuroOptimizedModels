@@ -229,19 +229,66 @@ Gemma 4 E2B is ~10x slower but produces substantially richer descriptions and su
 
 ### Stage 5 — E4B Assessment
 
-**Status:** PENDING
+**Status: COMPLETE (2026-04-11) — NOT RECOMMENDED**
 
-1. Download E4B IQ3_XXS (3.70 GB) and Q3_K_M (4.06 GB)
-2. Test with partial GPU offload — find max `-ngl N`
-3. If runnable: benchmark speed and accuracy
-4. If OOM or too slow (<5 t/s): document and skip
-5. Compare E4B accuracy vs E2B to determine if the speed cost is worth it
+| Model | Quant | Size | Params | pp512 t/s | tg128 t/s |
+|-------|-------|-----:|-------:|----------:|----------:|
+| E2B | IQ4_XS | 2.76 GiB | 4.65B | 17.55 | **11.38** |
+| **E4B** | **UD-IQ3_XXS** | **3.43 GiB** | **7.52B** | **4.12** | **3.26** |
+
+E4B is **3.5x slower** than E2B (3.26 vs 11.38 t/s) at a lower quantization level. GPU offload is even more impossible (7.52B params). The marginal accuracy improvement (MMLU Pro 69.4% vs 60.0%) does not justify 3.5x speed loss on this hardware.
+
+**Verdict:** E4B is not viable on Jetson Orin Nano 8 GB. Use E2B.
 
 ### Stage 6 — MLC-LLM Check (Stretch Goal)
 
-**Status:** PENDING
+**Status: SKIPPED**
 
-1. Check if `dustynv/mlc:0.20.0-r36.4.0` supports `gemma4` model type
+MLC-LLM `dustynv/mlc:0.20.0-r36.4.0` predates Gemma 4 (April 2026). The `gemma4` architecture is not in its supported model list (`llama, gemma, qwen, etc.` but not `gemma4`). No newer MLC-LLM container with Gemma 4 support is available for JetPack 6.2.
+
+Even if supported, MLC-LLM uses `cudaMalloc` for GPU model loading — the same 2.5 GB NvMap IOVM limit would block GPU offload for the 4.65B param model. CPU-only via llama.cpp remains the only viable path.
+
+---
+
+## Phase 7 — Final Summary
+
+### What We Learned
+
+1. **Gemma 4 E2B cannot use GPU on Jetson Orin Nano 8 GB.** The 262K vocabulary + Per-Layer Embeddings inflate the model to 4.65B total params (2.35-2.76 GiB at Q3-IQ4). This exceeds the 2.5 GB NvMap IOVM limit. Partial offload crashes due to PLE tensor graph splits (`GGML_SCHED_MAX_SPLIT_INPUTS`).
+
+2. **CPU-only at 11.38 t/s (IQ4_XS, t=4)** is the best achievable speed — 6.5x slower than Llama-3.2-1B on GPU (73.4 t/s).
+
+3. **But accuracy is dramatically higher:** 90% GSM8K (vs 40% Llama), MMLU Pro 60% (vs ~35% Llama). The model trades speed for reasoning quality.
+
+4. **Multimodal works:** Image understanding via mmproj produces rich, accurate descriptions. Requires 512+ max_tokens due to thinking mode. Audio/video supported in theory but untested.
+
+5. **E4B is not viable:** 3.26 t/s at 7.52B params. Too slow, too big.
+
+6. **The "E" in E2B is misleading for edge deployment.** Marketing says "2B effective" but inference reads all 4.65B params every token. The 262K vocabulary alone creates ~1 GB embedding tables. Google's "designed for edge" claim applies to phones with larger GPU VRAM budgets, not to 8 GB UMA Jetsons with 2.5 GB IOVM.
+
+### Updated Best Configs
+
+| Rank | Model | Runtime | t/s | Accuracy | Multimodal? |
+|------|-------|---------|----:|----------|:-----------:|
+| 1 | Llama-3.2-1B | MLC-LLM GPU | **73.4** | 40% GSM8K, 45% ARC | No |
+| 2 | LFM2.5-1.2B | llama.cpp GPU | **65.64** | 60% ARC | No |
+| 3 | Qwen2.5-0.5B | TRT-LLM GPU | **100.87** | 40% ARC | No |
+| 4 | **Gemma 4 E2B** | **llama.cpp CPU** | **11.38** | **90% GSM8K** | **Yes** |
+| 5 | Gemma 4 E4B | llama.cpp CPU | 3.26 | ~95% GSM8K (est.) | Yes |
+
+### Deployment Recommendation
+
+Use **Gemma 4 E2B (IQ4_XS, t=4, CPU-only)** when:
+- Multimodal input is needed (images, audio, video)
+- Reasoning accuracy matters more than speed
+- Function calling / agent workflows are needed
+- 128K context is required
+- ~11 t/s is acceptable latency
+
+Use **Llama-3.2-1B (MLC-LLM, GPU)** when:
+- Text-only, speed-critical applications
+- 73.4 t/s throughput is needed
+- GPU acceleration is essential
 2. If yes: compile E2B with q4f16_1 and benchmark (potential +20% vs llama.cpp)
 3. If no: check for newer MLC-LLM containers with Gemma 4 support
 
