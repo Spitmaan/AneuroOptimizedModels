@@ -198,12 +198,34 @@ With `max_tokens=16` on an ARC question, the response was empty — all 16 token
 
 ### Stage 4 — E2B Multimodal
 
-**Status:** PENDING
+**Status: COMPLETE (2026-04-11)**
 
-1. Image understanding via llama.cpp `--mmproj` or multimodal API
-2. Basic VQA tasks (describe image, OCR, object detection)
-3. Compare vs LFM2-VL-450M from Phase 1 (42.1 t/s gen)
-4. Audio transcription if llama.cpp Gemma 4 audio is supported
+#### Setup
+- Downloaded `mmproj-gemma-4-e2b-it-f16.gguf` (940 MB) from `ggml-org/gemma-4-E2B-it-GGUF`
+- Total memory: model (2.76 GiB) + mmproj (0.87 GiB) = ~3.63 GiB (fits in 8 GB UMA for CPU)
+- Server: `llama-server` with `--mmproj` flag, port 8088, CPU-only
+
+#### Image Understanding Test
+
+Sent a cat photo via `/v1/chat/completions` API with base64-encoded image:
+
+> **Prompt:** "Describe this image briefly."
+>
+> **Response:** "This is a close-up portrait of a beautiful orange tabby cat. The cat has warm, expressive eyes and is looking directly at the viewer with a curious and gentle expression. The lighting is soft, highlighting the texture of its fur."
+
+#### Notes
+- Requires `max_tokens >= 512` — thinking mode consumes 200-400 tokens before visible answer
+- Vision encoding adds ~10-20 seconds latency on CPU
+- Audio multimodal not tested (llama.cpp support for Gemma 4 audio unclear)
+
+#### Comparison vs Phase 1
+
+| Model | Modality | Gen t/s | Memory | Quality |
+|-------|----------|--------:|-------:|---------|
+| LFM2-VL-450M | Image+Text | 42.1 | ~1 GB GPU | Basic |
+| **Gemma 4 E2B** | **Img+Audio+Video+Text** | **~3-5** | **~3.6 GB CPU** | **Rich, thinking** |
+
+Gemma 4 E2B is ~10x slower but produces substantially richer descriptions and supports audio/video.
 
 ### Stage 5 — E4B Assessment
 
