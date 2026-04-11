@@ -301,6 +301,18 @@ On GPU, ANNs are more energy-efficient than SNNs. The SNN value proposition requ
 
 ---
 
+## 9. Phase 7 — Gemma 4 on Jetson (In Progress)
+
+**Goal:** Benchmark Google Gemma 4 E2B (2.3B effective / 5.1B total) and E4B (4.5B / 8B total) on Jetson Orin Nano. Apply the Edge Optimization Ladder. Evaluate multimodal capabilities.
+
+**Why:** Phases 5-6 optimized text-only language models to their ceiling (73.4 t/s for >1B). Gemma 4 E2B opens a fundamentally different capability class — **multimodal** (image + audio + video), function calling, thinking mode, 128K context, 140+ languages — in a package that Google designed specifically for edge deployment. It won't compete on raw text speed (~16-22 t/s estimated vs 73.4 for Llama), but it fills the **smart multimodal assistant** slot that no model in our current lineup covers. MMLU Pro 60% significantly outperforms Llama-3.2-1B (~35% est.) on reasoning benchmarks despite running on similar hardware.
+
+**Key challenge:** The "E2B" label is misleading — Per-Layer Embeddings inflate total parameters to 5.1B. At IQ4_XS (2.98 GB), the model is borderline for Jetson's 2.5 GB NvMap IOVM limit. Smaller quantizations (Q3_K_M at 2.54 GB) may be needed for full GPU offload.
+
+**Plan:** 6 stages covering feasibility, optimization ladder, accuracy, multimodal, E4B assessment, and MLC-LLM compilation. Full plan in `outputs/reports/phase7_gemma4_plan.md`.
+
+---
+
 ## Appendix: Repository Structure
 
 ```
