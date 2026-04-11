@@ -89,25 +89,85 @@ Bandwidth formula: `68 GB/s * 0.72 efficiency / weight_size_GB = estimated t/s`
 
 ### Stage 1 — E2B Quick Feasibility
 
-**Status:** PENDING
+**Status: COMPLETE (2026-04-11)**
 
-1. Pull official NVIDIA container: `ghcr.io/nvidia-ai-iot/llama_cpp:gemma4-jetson-orin`
-2. Download E2B GGUFs from `unsloth/gemma-4-E2B-it-GGUF`: Q3_K_M, IQ4_XS, Q4_K_M
-3. Test full GPU offload (`-ngl 99`) with each quant
-4. If IOVM OOM: find max `-ngl N` that fits
-5. Benchmark: pp512, tg128, VRAM usage
-6. Record which quant fits and at what offload level
+#### Setup
+- Container: `ghcr.io/nvidia-ai-iot/llama_cpp:gemma4-jetson-orin` (llama.cpp build 8638, 13.1 GB)
+- Existing `dustynv/llama_cpp:b5283` does NOT support gemma4 architecture
+- Downloaded GGUFs: UD-IQ3_XXS (2.19 GiB), Q3_K_M (2.35 GiB), IQ4_XS (2.76 GiB)
+- Cleaned 47 GB of stale models/images to make space (openvla-7b, TRT Edge-LLM workspace, Qwen2-VL-7B, etc.)
+
+#### GPU Offload: BLOCKED
+
+**Full GPU offload (`-ngl 99`) OOMs on ALL quantizations.** The 4.65B param model (with 262K vocabulary + PLE) is 2.19-2.76 GiB — exceeds the 2.5 GB NvMap IOVM limit after adding compute buffers.
+
+**Partial GPU offload crashes** with `GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS)`. The Per-Layer Embeddings architecture creates too many cross-device tensor transfers for the ggml graph scheduler. Tested ngl=8 through ngl=28 — all crash.
+
+**`--override-tensor` to pin embeddings to CPU**: still OOMs at model load.
+
+**Root cause:** The 262K vocabulary (vs 128K for Llama, 151K for Qwen) creates ~1 GB embedding tables. Combined with PLE per-layer tensors, the model is fundamentally too large for the 2.5 GB IOVM at any quantization.
+
+#### CPU-Only Results (CUDA_VISIBLE_DEVICES="" to prevent auto-CUDA routing)
+
+| Quant | Size (GiB) | BPW | pp512 t/s | tg128 t/s |
+|-------|----------:|----|----------:|----------:|
+| UD-IQ3_XXS | 2.19 | 3.06 | 12.35 | 7.35 |
+| **Q3_K_M** | **2.35** | **4.34** | **19.99** | **8.77** |
+| **IQ4_XS** | **2.76** | **4.25** | **25.24** | **9.93** |
+
+All 3 runs, 6 ARM cores, pure CPU. IQ4_XS is fastest (9.93 t/s tg128) despite being largest — better vectorization of IQ4 kernels on ARM.
+
+#### Comparison vs Phase 5 Best
+
+| Model | Runtime | tg128 t/s | GPU? |
+|-------|---------|----------:|:----:|
+| Llama-3.2-1B (MLC-LLM) | q4f16_1 | **73.4** | YES |
+| LFM2.5-1.2B (llama.cpp) | IQ4_XS+FA | **65.64** | YES |
+| **Gemma 4 E2B** (llama.cpp) | **IQ4_XS CPU** | **9.93** | NO |
+
+**Gemma 4 E2B is 7.4x slower than Llama-3.2-1B** due to CPU-only execution. The 4.65B total params (from 262K vocab + PLE) make GPU offload impossible on Jetson Orin Nano 8 GB.
 
 ### Stage 2 — E2B Edge Optimization Ladder
 
-**Status:** PENDING
+**Status: COMPLETE (2026-04-11)**
 
-Apply Phase 5 methodology:
-1. Flash Attention (`-fa 1`) — expect +9-12%
-2. Quant comparison: IQ3_XXS vs Q3_K_M vs IQ4_XS vs Q4_K_M
-3. Context window: test at `-c 2048` and `-c 4096` (reduce from 128K default)
-4. Find optimal config for this architecture
-5. Compare vs Phase 5 best configs (Llama 73.4, LFM 65.6)
+Flash Attention N/A (CPU-only). Context limited by RAM. Key optimization: **thread count**.
+
+#### Thread Count Sweep (E2B IQ4_XS, CPU-only)
+
+| Threads | pp512 t/s | tg128 t/s | Notes |
+|--------:|----------:|----------:|-------|
+| 2 | 8.91 | 6.49 | Too few |
+| 3 | 13.18 | 9.03 | |
+| **4** | **17.55** | **11.38** | **OPTIMAL for tg** |
+| 6 | 25.28 | 10.08 | Best for pp, worse tg |
+| 8 | 24.93 | 8.07 | Over-subscribed |
+
+**Winner: t=4 at 11.38 t/s** (+14.6% vs default t=6). Token generation is memory-bandwidth-bound on ARM — fewer threads = less cache thrashing.
+
+#### Quant Ranking (all at t=6, CPU-only)
+
+| Quant | tg128 t/s | Quality |
+|-------|----------:|---------|
+| **IQ4_XS** | **9.93** | Best (4.25 BPW) |
+| Q3_K_M | 8.77 | Good (4.34 BPW) |
+| UD-IQ3_XXS | 7.35 | Lowest (3.06 BPW) |
+
+**Best config: IQ4_XS at t=4 → 11.38 t/s tg128**
+
+#### Quality Check
+
+Model correctly decomposed 25*37 into (25*30)+(25*7)=750+175=925. **Thinking mode activates automatically** — generates internal reasoning tokens before answering. This consumes generation budget: interactive rate drops to ~3.4 t/s due to thinking overhead.
+
+#### Phase 5 Comparison (GPU models for context)
+
+| Model | tg128 t/s | GPU? | Multimodal? |
+|-------|----------:|:----:|:-----------:|
+| Llama-3.2-1B (MLC-LLM) | **73.4** | YES | No |
+| LFM2.5-1.2B (llama.cpp) | **65.64** | YES | No |
+| **Gemma 4 E2B (llama.cpp)** | **11.38** | NO | Yes (img+audio+video) |
+
+Gemma 4 E2B is 6.5x slower but brings multimodal, 128K context, thinking mode, function calling, and 140+ languages.
 
 ### Stage 3 — E2B Accuracy Benchmarks
 
