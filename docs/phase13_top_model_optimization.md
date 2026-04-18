@@ -1,28 +1,39 @@
 # Phase 13 — Extreme Optimization of Top LLM / VLM / VLA Models
 
 **Project:** `AneuroOptimizedModels`
-**Date:** 2026-04-17
+**Date:** 2026-04-17 · **Revised:** 2026-04-18 (locked-in decisions)
 **Goal:** Take the best-performing LLM, VLM, and VLA we've identified across Phases 1–12 and push each through a systematic optimization ladder — quantization, distillation, runtime compilation, kernel fusion — measuring speed *and* accuracy at every rung. Output: production-ready, measurably-better replacements for the current lineup.
+
+## Locked Decisions (2026-04-18)
+
+- **VLA ladder kept** (Tendon Prime etc.), in addition to LLM + VLM ladders.
+- **Execution:** **sequential** — Ladder A (LLM) → B (VLM) → C (VLA), with detailed reporting after each rung and ladder. User decides whether to continue after each completion.
+- **Heavy-duty training in scope** — distillation-aware training, custom draft models, from-scratch students all allowed. Extra sub-phases (13.1, 13.2, …) can spin out as needed.
+- **Nerve Prime track** added to Ladder C, conditional on Phase 12 producing Nerve-F and/or Nerve-D.
+- **Training compute:** DGX Spark (ARM64 Blackwell) for all training / distillation / export work. Checkpoints committed with tags per long-running-training policy.
 
 **Depends on:**
 - Phase 10 complete (new model lineup deployed)
-- Phase 11 closeout (techniques from Orion-Lite KB available)
-- Phase 12 complete (real VLA baselines to optimize)
+- Phase 11 closeout (techniques from Orion-Lite KB available, our retrained student demonstrates the recipe)
+- Phase 12 complete (real VLA baselines to optimize, including Nerve-F/Nerve-D for Prime track)
 
 ---
 
 ## Target Models (starting points)
 
-From Phase 10 benchmarks on Orin Nano 8GB:
+From Phase 10 benchmarks on Orin Nano 8GB + Phase 12 VLA results:
 
-| Category | Champion (baseline) | Baseline speed | Baseline accuracy |
-|---|---|---:|---|
-| **LLM** | Aneuro Cortex Ultra (Llama 3.2 1B MLC q4f16_1) | 73 t/s | ~60% ARC-C |
-| **LLM (speed)** | Aneuro Nova (Gemma 3 270M Q4_K_M) | 63.7 t/s | TBM — probably 30-ish% ARC-C |
-| **VLM** | Aneuro Lumen (LFM2-VL 1.6B Q4_0) | 35.7 t/s | Visual QA TBM |
-| **VLA** | Aneuro Tendon (SmolVLA 450M fp16) — Phase 12 | ~500 ms/step | ~78% LIBERO (claimed) |
+| Category | Champion (baseline) | Baseline speed | Baseline accuracy | Target name |
+|---|---|---:|---|---|
+| **LLM** | Aneuro Cortex Ultra (Llama 3.2 1B MLC q4f16_1) | 73 t/s | ~60% ARC-C | **Aneuro Cortex Prime** |
+| **LLM (speed)** | Aneuro Nova (Gemma 3 270M Q4_K_M) | 63.7 t/s | TBM | **Aneuro Nova Prime** (stretch) |
+| **VLM** | Aneuro Lumen (LFM2-VL 1.6B Q4_0) | 35.7 t/s | Visual QA TBM | **Aneuro Lumen Prime** |
+| **VLA (flow)** | Aneuro Tendon (SmolVLA 450M fp16) | ~500 ms/step | ~78% LIBERO (claimed) | **Aneuro Tendon Prime** |
+| **VLA (autoregressive)** | Aneuro Sinew (π₀-FAST Q4 GGUF) — Phase 12 | 150–300 ms/step | TBM | **Aneuro Sinew Prime** |
+| **VLA (our own, flow)** | Aneuro Nerve-F — Phase 12 output | TBD | TBD on LIBERO | **Aneuro Nerve-F Prime** *(cond.)* |
+| **VLA (our own, discrete)** | Aneuro Nerve-D — Phase 12 output | TBD | TBD on LIBERO | **Aneuro Nerve-D Prime** *(cond.)* |
 
-*Each of these gets its own full optimization ladder in Phase 13.*
+*Each of these gets its own full optimization ladder in Phase 13. Sequential execution (Ladder A → B → C).*
 
 ---
 
@@ -152,16 +163,35 @@ Extends the Phase 5 framework (`bench_gguf.py`) to all three modalities. Every r
 
 ---
 
-## Cross-cutting: Pi-0-FAST via GGUF (bonus track)
+## Nerve Prime Track — extends Ladder C, conditional on Phase 12
 
-Parallel to Ladder C, explore what Phase 12 deferred:
-- Port PaliGemma weights to llama.cpp
-- Quantize to Q4_K_M
-- Implement FAST detokenizer as C++ post-processor
-- Benchmark against SmolVLA on LIBERO
-- Literature target: LiteVLA-Edge 150 ms on AGX Orin — Nano expected 2–3× slower
+If Phase 12 successfully produces Aneuro Nerve-F and/or Nerve-D (Path F custom-trained Phi-3.5-vision VLAs), Phase 13 optimizes them further:
 
-**If** successful, this becomes the fifth ANEUROLOGIC VLA: **Aneuro Sinew** (autoregressive, quantized) to complement Tendon (flow-matching, fp16).
+### Ladder C-Nerve (parallel to Tendon ladder)
+
+**Rung 0 — Baseline:** Nerve-F (flow, INT4-quant) and Nerve-D (discrete FAST, INT4 GGUF) as shipped in Phase 12
+
+**Rung 1 — Distillation-aware fine-tune:** Re-train the last N action-head layers with QAT (quantization-aware training) on DGX Spark, keeping Phi-3.5-vision backbone frozen. Expected: recover ~1-2 pp LIBERO lost to naive INT4.
+
+**Rung 2 — Student backbone compression:** Distil Phi-3.5-vision into a smaller backbone (e.g., SmolLM2-1.7B + SigLIP). Full-pipeline retraining on DGX Spark, multi-day. **High effort, high reward.** This is a research sub-phase (13.2).
+
+**Rung 3 — GGUF export (Nerve-D only):** Port the Phi-3.5-vision + FAST-head architecture to llama.cpp (once mainline llama.cpp supports Phi-3.5-vision, or via custom patch). Q4_K_M quant. Target latency <200 ms on Nano.
+
+**Rung 4 — TRT-Edge-LLM export (Nerve-D only):** If the llama.cpp path works, try TRT-Edge-LLM export next. Target sub-100 ms.
+
+**Output:** Aneuro Nerve-F Prime + Aneuro Nerve-D Prime (one or both, depending on what converges).
+
+---
+
+## Sub-phase numbering convention
+
+Per user's "extra versions/steps" directive, heavy-duty work that expands scope gets its own sub-phase:
+
+- **Phase 13.1** — Core optimization ladders (Rungs 1–3 of A, B, C). Most rungs land here.
+- **Phase 13.2** — Distillation-aware training across A/B/C Rung 4–5 (requires days of DGX Spark time). Includes custom draft model for speculative decoding, distilled-backbone Nerve Prime.
+- **Phase 13.3** — Export to exotic runtimes (TRT-Edge-LLM VLA export, ONNX → TensorRT chains, etc.). Separate track because blockers are research-grade.
+
+Each sub-phase stands on its own — user can approve advancement independently after reviewing the previous sub-phase's results.
 
 ---
 
@@ -204,10 +234,14 @@ Parallel to Ladder C, explore what Phase 12 deferred:
 | Docs + deploy + closeout | 1–2 |
 | **Total** | **~11–17 days** |
 
-## Approval Gate
+## Approval Gate — CLEARED (2026-04-18)
 
-- [ ] Ladder scope confirmed (A + B + C) or trimmed
-- [ ] Bonus Pi-0-FAST track approved or deferred
-- [ ] Prime naming OK (Cortex Prime / Lumen Prime / Tendon Prime / Sinew)
-- [ ] Order of execution (A → B → C or parallel on separate weeks)
-- [ ] Phase 11 + 12 completed before starting
+| Q | Answer |
+|---|---|
+| Q13.1 | Keep VLA ladder (Ladder C) — yes |
+| Q13.2 | Sequential execution A → B → C, detail report after each |
+| Q13.3 | Heavy-duty / distillation-aware training kept in scope; sub-phases 13.1–13.3 defined |
+| Q13.4 | Nerve Prime track added, conditional on Phase 12 output |
+| Prime naming | Confirmed (Cortex / Lumen / Tendon / Sinew / Nerve-F / Nerve-D Prime + Nova Prime stretch) |
+
+No blocking questions. Ready to execute after Phases 10 + 11 + 12.
