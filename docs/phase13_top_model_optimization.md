@@ -14,7 +14,7 @@
 
 **Depends on:**
 - Phase 10 complete (new model lineup deployed)
-- Phase 11 closeout (techniques from Orion-Lite KB available, our retrained student demonstrates the recipe)
+- Phase 11 closeout (2026-04-20) — Orion-Lite KB entries live at `Aneurologic_Memory/knowledge_base/edge_optimization_kb.md` §B.1, §F.6; Jetson-measured student decoder latency + VRAM at `modelgarden/docs/phase11_orion_lite_closeout.md` §2.  **Note:** our own retrained student is deferred until Rung 4 of this phase fires — published ablation checkpoints were sufficient to close Phase 11.
 - Phase 12 complete (real VLA baselines to optimize, including Nerve-F/Nerve-D for Prime track)
 
 ---
@@ -76,13 +76,20 @@ Extends the Phase 5 framework (`bench_gguf.py`) to all three modalities. Every r
 - Investigate whether swap-to-FP8 compute (NVFP4) is usable on Orin (Ampere sm_87 doesn't have FP8 — decision: **skip, not supported**)
 
 ### Rung 4 — Distilled draft model for speculative decoding
-- Train a 200M-class draft model from this Cortex Ultra teacher (feature-mimic L1, per Orion-Lite recipe from Phase 11 KB)
+- Train a 200M-class draft model from this Cortex Ultra teacher
+- **Distillation recipe: L1 feature-mimic on the final hidden state**, inherited from Phase 11 Orion-Lite closeout.  See:
+  - [`Aneurologic_Memory/knowledge_base/edge_optimization_kb.md`](../../Aneurologic_Memory/knowledge_base/edge_optimization_kb.md) §B.1 — the primitive + why L1 beats L2/KL/Huber on the tail.
+  - [`modelgarden/docs/orion_lite_transferable_techniques.md`](../../modelgarden/docs/orion_lite_transferable_techniques.md) §1 — concrete application pattern for chat.
+  - [`modelgarden/plans/phase11_orion_lite_research.md`](../../modelgarden/plans/phase11_orion_lite_research.md) §7 — note that Phase 11's Step 4.5-full retrain is *deferred until this Rung fires* (we need to own the full training pipeline when adapting to a new teacher/student pair).
+- Concrete shape for Cortex Ultra: freeze tokenizer-embedding + first-K attention blocks of the Llama 3.2 1B teacher; train a 200 M tail (SmolLM2 or Gemma 3 270M architecture, ~5-6 transformer layers) with `ℒ = ℒ_mimic + α·ℒ_lm_ce`, where `ℒ_mimic = (1/B·C)·Σ‖T_student − T_teacher‖₁` on the final hidden state and `ℒ_lm_ce` is the usual next-token CE for stability.
 - Run llama-server / MLC with `--draft-model`
 - Expected: 1.5–2× wall-clock speedup on structured outputs
+- **Prerequisite when this Rung fires:** Phase 11 deferred workstreams (Step 4.5-full training pipeline on Spark + Step 4.6 cross-domain distillation) both get pulled in together — single setup investment amortises across both.
 
 ### Rung 5 — Task-specific distillation (stretch)
 - Distill a 200M "Cortex Mini" specifically for the chat domain using our existing conversation logs
 - Apache-2.0 SmolLM2 or Gemma 3 270M as student architecture
+- **Same L1 feature-mimic recipe** as Rung 4 with conversation-log-filtered teacher samples.
 - Expected: ~50–60% of Cortex Ultra's quality at 3× speed
 
 ### Output: **Aneuro Cortex Prime** — pushed through at least Rungs 1-3 (Rungs 4-5 if time allows)
