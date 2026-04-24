@@ -170,6 +170,64 @@ Extends the Phase 5 framework (`bench_gguf.py`) to all three modalities. Every r
 
 ---
 
+## Ladder D — Compass C.2 full-pipeline optimization (new 2026-04-24)
+
+Aneuro Compass C.2 (Phase 12 Path C.2) shipped 2026-04-24 with the full EVA-02-L + QT-Former + student-decoder pipeline live on Jetson Orin Nano.  The pipeline is **functional** and end-to-end correct (0/0 missing/unexpected keys on both EVA and QT-Former checkpoint loads, `pipeline=c2_full` flag confirmed in /score responses, trajectory directionally sensitive to image content), but the measured latency is **~167 s/frame** because EVA-02-L runs on the 6-core CPU to sidestep Jetson IOVM OOMs when the full pipeline is co-resident on GPU.  This ladder makes Compass C.2 practical for live-camera use.
+
+**Target:** Aneuro Compass Prime — same Orion-Lite weights, same /score contract, but ≤ 2-5 s/frame on Jetson Orin Nano 8 GB.  Output format and ego_fut_preds shape unchanged (backwards compat with the /demo/kinetic UI).
+
+**Dependencies:**
+- Phase 12 Path C.2 shipped (code at `aneurologic-server/angate/compass_c2/{eva_vit.py, qt_former.py, attention.py}` + `serve_compass.py`).
+- Weights at `/home/spitman/Projects/OrionLite/weights/orion_lite.fp16.pth` on Jetson (3.48 GB fused fp16 checkpoint with `img_backbone.*` + `pts_bbox_head.{input_projection, query_embedding, transformer, output_projection}.*` + `student_model.*` prefixes already verified).
+- Ladder D depends on Ladder C Rungs 0-3 for shared tooling (bench harness, memory-peak audit script).
+
+### Rung D.1 — BnB 4-bit quantisation on EVAViT weights
+
+- **What:** post-load, walk `eva.model` and replace every `nn.Linear` + `nn.Conv2d` with its `bitsandbytes.nn.Linear4bit` / equivalent, matching the Retina / Reflex recipe from Phase 12.  Quantisation happens lazily on first `.cuda()`.
+- **Why:** EVA-02-L is 303 M params @ fp16 ≈ 600 MB of weights.  NF4 drops that to ~160 MB, which (per Reflex) is the difference between NvMap-fragmentation OOM and surviving the bulk GPU move.  Compute stays in fp16 via `bnb_4bit_compute_dtype`.
+- **How:**
+  1. Import `bitsandbytes.nn.Linear4bit` + `Params4bit` in `compass_c2/__init__.py` via a helper `replace_linear_4bit(module, skip_names=(...))` (reusable across future C.x rungs).
+  2. Call helper on `eva` right after `load_state_dict`, before `.cuda()`.
+  3. Skip `patch_embed.proj` (Conv2d to embed_dim) — that path is not a Linear and is small anyway.
+  4. Measure peak VRAM during a single EVA forward with the 4-bit model loaded on GPU; if it fits (expect ~800 MB vs current OOM), move EVA back to GPU.
+- **Expected:** 30-50× speedup (EVA forward drops from ~150 s on CPU to ~3-5 s on GPU; total /score to ~5 s).
+- **Risk:** BnB's `bnb_4bit_compute_dtype` requires an aarch64 wheel with Jetson cu126 — `pypi.jetson-ai-lab.io/jp6/cu126/` ships `bitsandbytes-0.48.0.dev0+ff389db` which is what Retina + Reflex both use.  Known to work.  Accuracy drop on EVA is unmeasured; BnB 4-bit NF4 is typically <1 % accuracy loss on ViT-scale models, but the Orion-Lite trajectory head may be sensitive to fine-grained vision details.  Monitor trajectory direction on a known synthetic scene before/after.
+- **Acceptance:** speedup ≥ 20×, GPU peak ≤ 3 GB, trajectory direction unchanged on the `(120, 130, 80)` synthetic test frame within 15 % magnitude.
+
+### Rung D.2 — 320×320 EVA with rope-buffer filter
+
+- **What:** keep EVA on GPU (post Rung D.1 or independent of it) but at half resolution — 320×320 input → 20×20 grid → 400 vision tokens instead of 1600.
+- **Why:** attention memory scales O(N²) with tokens; 320×320 is 16× less peak activation than 640×640.  Allows GPU placement even without 4-bit.
+- **How:**
+  1. Change `_EVA_IMG_SIZE = 320` in `serve_compass.py`.
+  2. Handle the `blocks.*.attn.rope.freqs_{cos,sin}` buffer size mismatch (checkpoint [1600,64] vs new-model [400,64]) by filtering those 48 buffer keys out of `eva_sd` before `load_state_dict` — they're deterministic functions of `img_size` and get re-initialised correctly during `__init__`.
+  3. Verify patch_embed and abs_pos_embed still load; ViT convention is to bilinearly interpolate the abs_pos_embed to the new grid, but the EVAViT code may need a `--interpolate-pos-embed` helper call.
+  4. Attempt this rung independently (without Rung D.1) to measure the "cheap quant-free" speedup alone.
+- **Expected:** EVA forward ~0.5-1 s on GPU at 320×320 (vs 150 s CPU at 640×640).  Accuracy regression because Orion-Lite was trained at 640.  Some trajectory-direction degradation on scenes with fine-grained detail.
+- **Risk:** the trained/inference resolution mismatch is a real distribution shift.  On the `/demo/kinetic` UI it may produce visibly wrong trajectories on complex scenes.  Compare against Rung D.1 for the accuracy/speed trade.
+- **Acceptance:** speedup ≥ 50×, trajectory direction matches D.1's output within 30 % magnitude on 5 varied test frames (straight road, left curve, right curve, stop line, turn).
+
+### Rung D.3 — Faithful 3D camera-projected PE port
+
+- **What:** replace the `Sinusoidal2DPE` proxy in `qt_former.py` with the actual 3D-camera-frustum PE Orion-Lite's parent detector constructs, so QT-Former's cross-attention gets the same positional information it was trained with.
+- **Why:** the Phase 12 C.2 ship notes "Sinusoidal2DPE is a proxy for Orion-Lite's 3D camera-projected PE; trajectories are directionally plausible but not guaranteed faithful."  A rigorous correctness pass needs the real PE.
+- **How:**
+  1. Trace the `pos_embed` construction in Orion-Lite's parent detector file (`mmcv/models/detectors/orion.py` or similar — not yet in the extracted `compass_c2/` tree).  It's typically built from camera intrinsics + a 3D grid of reference points in ego frame, then projected via the LiDAR-to-camera matrix.
+  2. For a single-camera demo (no multi-view, no LiDAR), simplify to a fixed intrinsics matrix (calibrate against any real Orion-Lite config value).
+  3. Package the PE constructor as `compass_c2.pos_embed_3d.build_position_embed(img_size, intrinsics)` returning a buffer of shape `[H*W, 384]` to concatenate with the 2D sinusoidal.
+  4. Re-verify /score output on the same deterministic test image; compare trajectories against D.1/D.2 variants — expect sharper directional confidence (baseline C.2 is 71 % on a synthetic frame; a faithful PE should push this up or improve on more-realistic scenes).
+- **Expected:** no latency change; correctness improvement on realistic camera frames.
+- **Risk:** the pc_range / coordinate-frame mismatch is subtle.  Worst case we regress trajectory correctness rather than improve it.  Gate behind an A/B flag (`--c2-pe=2d` vs `--c2-pe=3d`) so we can ship both and measure.
+- **Acceptance:** at least one of {sharper top-action confidence, lower trajectory noise, better LIBERO subset score if we can run one} vs Rung D.2.
+
+### Ladder D — Output: Aneuro Compass Prime
+
+- Rungs D.1 + D.2 combined should drop /score latency from 167 s → **single-digit seconds**, making Compass live-camera usable.
+- Rung D.3 is the correctness-faithfulness bump; gated A/B so we don't ship regressions.
+- Order: D.1 first (cheap 4-bit quant, zero distribution shift), then D.2 (resolution cut if D.1 alone isn't fast enough), then D.3 (correctness polish).
+
+---
+
 ## Nerve Prime Track — extends Ladder C, conditional on Phase 12
 
 If Phase 12 successfully produces Aneuro Nerve-F and/or Nerve-D (Path F custom-trained Phi-3.5-vision VLAs), Phase 13 optimizes them further:
