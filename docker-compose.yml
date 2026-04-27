@@ -42,8 +42,10 @@ services:
       - /sys/bus/i2c/drivers/ina3221:/sys/bus/i2c/drivers/ina3221:ro
       - /sys/class/thermal:/sys/class/thermal:ro
       - /sys/class/hwmon:/sys/class/hwmon:ro
-      # HuggingFace cache (shared with Phase 1 to avoid re-downloading)
-      - /home/spitman/.cache/huggingface:/workspace/models/hf_cache
+      # HuggingFace cache (shared with Phase 1 to avoid re-downloading).
+      # Override via env: HF_CACHE_DIR=/path/to/.cache/huggingface (or set
+      # via .env in the same dir as this compose file).
+      - ${HF_CACHE_DIR:-${HOME}/.cache/huggingface}:/workspace/models/hf_cache
       # TensorRT engine cache (persistent between runs)
       - phase5_trt_cache:/workspace/outputs/trt_engines
     stdin_open: true

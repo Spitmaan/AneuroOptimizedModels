@@ -29,8 +29,13 @@ from pathlib import Path
 
 import requests
 
-LLAMA_BENCH  = Path("/home/spitman/tools/llama.cpp/build/bin/llama-bench")
-LLAMA_SERVER = Path("/home/spitman/tools/llama.cpp/build/bin/llama-server")
+import os
+_LLAMA_BUILD = Path(os.environ.get(
+    "LLAMA_CPP_BUILD_DIR",
+    str(Path.home() / "tools" / "llama.cpp" / "build"),
+))
+LLAMA_BENCH  = _LLAMA_BUILD / "bin" / "llama-bench"
+LLAMA_SERVER = _LLAMA_BUILD / "bin" / "llama-server"
 SERVER_PORT  = 8765
 RESULTS_JSON = Path(__file__).parent.parent.parent / "outputs" / "logs" / "edge_opt" / "results.json"
 _HF_CACHE    = "/tmp/hf_datasets_cache"
